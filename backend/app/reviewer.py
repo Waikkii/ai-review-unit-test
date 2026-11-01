@@ -25,7 +25,7 @@ def review(fields, keywords, username):
     module = importlib.import_module(settings.integration_module)
     allowed = {host.strip().lower() for host in settings.attachment_hosts.split(",") if host.strip()}
     urls = attachment_urls(fields["附件链接"])
-    if not urls or len(urls) > 10:
+    if (fields["附件链接"].strip() and not urls) or len(urls) > 10:
         raise ValueError("附件链接数量无效")
     images = []
     for url in urls:

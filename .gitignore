@@ -12,3 +12,6 @@ data/
 wheelhouse/
 *.zip
 *.tsbuildinfo
+*.xlsx
+*.xls
+*.xlsm

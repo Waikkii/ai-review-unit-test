@@ -7,18 +7,21 @@ from app.config import settings
 from app.reviewer import review, InvalidVerdict
 
 @pytest.mark.parametrize("valid", [True, False])
-def test_openai_compatible_adapter_and_raw_result(monkeypatch, valid):
+@pytest.mark.parametrize("with_attachment", [True, False])
+def test_openai_compatible_adapter_and_raw_result(monkeypatch, valid, with_attachment):
     adapter = types.ModuleType("test_corp")
     downloaded = []
     def download(url, username):
         downloaded.append((url, username))
         return b"\xff\xd8\xfftest-jpeg", "image/jpeg"
     def messages(fields, keywords, images):
-        assert images[0]["url"].startswith("data:image/jpeg;base64,")
+        assert len(images) == int(with_attachment)
+        if images:
+            assert images[0]["url"].startswith("data:image/jpeg;base64,")
         assert fields["用例编号"] == "TC-001"
         assert keywords[0]["payload"] == {"any_domain_key": ["custom"]}
         return [{"role":"user","content":[{"type":"text","text":"检查测试项"},
-            {"type":"image_url","image_url":images[0]}]}]
+            *[{"type":"image_url","image_url":image} for image in images]]}]
     adapter.download_attachment = download
     adapter.build_messages = messages
     monkeypatch.setitem(sys.modules, "test_corp", adapter)
@@ -37,7 +40,7 @@ def test_openai_compatible_adapter_and_raw_result(monkeypatch, valid):
         return httpx.Response(200,json=raw)
     real_client = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
-    args=({"用例编号":"TC-001","附件链接":"https://intranet.example/a.jpg"},
+    args=({"用例编号":"TC-001","附件链接":"https://intranet.example/a.jpg" if with_attachment else ""},
           [{"payload":{"any_domain_key":["custom"]}}],"worker-user")
     if valid:
         result, original = review(*args)
@@ -47,7 +50,7 @@ def test_openai_compatible_adapter_and_raw_result(monkeypatch, valid):
         with pytest.raises(InvalidVerdict) as exc:
             review(*args)
         assert exc.value.raw == raw
-    assert downloaded == [("https://intranet.example/a.jpg","worker-user")]
+    assert downloaded == ([("https://intranet.example/a.jpg","worker-user")] if with_attachment else [])
 
 def test_adapter_rejects_fake_image(monkeypatch):
     adapter = types.ModuleType("test_corp")

@@ -9,9 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
 from .db import get_db, uid
 from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit
-from .schemas import Login, ItemEdit, KeywordChange, Decision, UserChange
+from .schemas import Login, ItemEdit, KeywordChange, KeywordEntryChange, Decision, UserChange
+from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
 from .auth import authenticate, issue_token, current_user, admin_user
-from .excel import parse_excel, export_excel, attachment_urls
+from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
 
@@ -131,8 +132,6 @@ def edit_item(item_id: str, data: ItemEdit, user=Depends(current_user), db=Depen
     if not item:
         raise HTTPException(404, "测试项不存在")
     report = visible_report(db, item.report_id, user, write=True)
-    if not attachment_urls(data.fields["附件链接"]):
-        raise HTTPException(422, "附件链接必须包含 HTTP(S) 地址")
     before = item.current
     updated = db.execute(update(Item).where(Item.id == item.id, Item.version == data.version)
                          .values(current=data.fields, version=data.version + 1))
@@ -222,8 +221,10 @@ def request_change(data: KeywordChange, user=Depends(current_user), db=Depends(g
             raise HTTPException(404, "关联结果不存在")
         run = visible_run(db, result.run_id, user)
         visible_report(db, run.report_id, user, write=True)
-        if result.domain != data.domain or result.status not in {"failed", "needs_review", "error"}:
-            raise HTTPException(422, "关联项必须属于相同领域且需要处理")
+        same_item = (matches_entry(data.payload, result.fields) if data.domain == ENTRY_DOMAIN
+                     else result.domain == data.domain)
+        if not same_item or result.status not in {"failed", "needs_review", "error"}:
+            raise HTTPException(422, "关联项必须匹配关键词适用对象且需要处理")
     existing = db.scalar(select(Keyword).where(Keyword.domain == data.domain, Keyword.key == data.key))
     if data.action == "create":
         if existing or data.base_version != 0:
@@ -240,6 +241,15 @@ def request_change(data: KeywordChange, user=Depends(current_user), db=Depends(g
     audit(db, user, "keyword.request", change.id, after=data.model_dump(), reason=data.reason)
     db.commit()
     return {"id": change.id, "state": change.state}
+
+@app.post("/api/keyword-entry-requests", status_code=201)
+def request_entry_change(data: KeywordEntryChange, user=Depends(current_user), db=Depends(get_db)):
+    payload = data.entry.model_dump()
+    change = KeywordChange(action=data.action, domain=ENTRY_DOMAIN, key=entry_key(payload),
+                           payload=payload, base_version=data.base_version,
+                           reason=data.reason, result_id=data.result_id)
+    return request_change(change, user, db)
+
 
 @app.get("/api/keyword-requests")
 def changes(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),

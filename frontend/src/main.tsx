@@ -115,6 +115,11 @@ async function download(path: string, name: string) {
 }
 const json = (value: unknown) => JSON.stringify(value);
 const PAGE = 100;
+const keywordFields = { a: "测试对象", b: "用例编号", c: "用例名称", d: "测试小项", e: "关键词" };
+const entryDomain = "__five_column_keywords__";
+const emptyEntry = () => ({ a: "", b: "", c: "", d: "", e: "" });
+const keywordText = (payload: Record<string, unknown>) =>
+  Object.entries(keywordFields).map(([key, label]) => `${label}：${String(payload[key] ?? "")}`).join("\n");
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
@@ -145,9 +150,7 @@ function App() {
     [editFields, setEditFields] = useState<Record<string, string>>({}),
     [reason, setReason] = useState("");
   const [action, setAction] = useState("create"),
-    [domain, setDomain] = useState(""),
-    [key, setKey] = useState(""),
-    [payload, setPayload] = useState("{}"),
+    [entry, setEntry] = useState<Record<string, string>>(emptyEntry),
     [kwReason, setKwReason] = useState(""),
     [linkResult, setLinkResult] = useState<string | null>(null);
   const [decision, setDecision] = useState<{
@@ -315,27 +318,20 @@ function App() {
     setFilter("");
   };
   const kwFrom = (k: Keyword) => {
-    setDomain(k.domain);
-    setKey(k.key);
-    setPayload(JSON.stringify(k.payload, null, 2));
+    setEntry(Object.fromEntries(Object.keys(keywordFields).map(key => [key, String(k.payload[key] ?? "")])));
     setAction("update");
     setLinkResult(null);
   };
   const linkedKeyword = keywords.find(
-    (k) => k.domain === domain && k.key === key,
+    (k) => k.domain === entryDomain && ["a", "b", "c", "d"].every(key => k.payload[key] === entry[key]),
   );
   const submitKeyword = () =>
     act(async () => {
-      const parsed = JSON.parse(payload);
-      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object")
-        throw new Error("关键词内容必须是 JSON 对象");
-      await api("/keyword-requests", {
+      await api("/keyword-entry-requests", {
         method: "POST",
         body: json({
           action,
-          domain,
-          key,
-          payload: parsed,
+          entry,
           base_version: action === "create" ? 0 : (linkedKeyword?.version ?? 0),
           reason: kwReason,
           result_id: linkResult,
@@ -505,7 +501,7 @@ function App() {
             <section className="card upload">
               <div>
                 <h2>上传单元测试报告</h2>
-                <p>每个 Sheet 对应一个领域，仅审查附件链接有值的测试项。</p>
+                <p>每个领域 Sheet 中，仅审查“测试详情”下“值”非空的测试项；附件可为空。</p>
               </div>
               <label className="button primary">
                 {busy ? "正在处理…" : "选择 Excel 上传"}
@@ -725,10 +721,14 @@ function App() {
                               ) && (
                                 <button
                                   onClick={() => {
-                                    setDomain(r.domain);
                                     setLinkResult(r.id);
-                                    setKey("");
-                                    setPayload("{}");
+                                    setEntry({
+                                      a: r.fields["测试对象"] ?? "",
+                                      b: r.fields["用例编号"] ?? "",
+                                      c: r.fields["用例名称"] ?? "",
+                                      d: r.fields["测试小项"] ?? "",
+                                      e: "",
+                                    });
                                     setAction("create");
                                     setTab("keywords");
                                   }}
@@ -831,32 +831,17 @@ function App() {
                     ))}
                   </select>
                 </label>
-                <label>
-                  领域（Sheet 名称）
-                  <input
-                    required
-                    value={domain}
-                    onChange={(e) => setDomain(e.target.value)}
-                  />
-                </label>
-                <label>
-                  关键词 key
-                  <input
-                    required
-                    value={key}
-                    onChange={(e) => setKey(e.target.value)}
-                  />
-                </label>
-                <label>
-                  关键词内容（JSON 对象）
-                  <textarea
-                    rows={7}
-                    required
-                    value={payload}
-                    onChange={(e) => setPayload(e.target.value)}
-                    disabled={action === "delete"}
-                  />
-                </label>
+                {Object.entries(keywordFields).map(([key, label]) => (
+                  <label key={key}>
+                    {label}
+                    <input
+                      required={key === "e"}
+                      value={entry[key]}
+                      disabled={key === "e" ? action === "delete" : action !== "create"}
+                      onChange={(e) => setEntry({ ...entry, [key]: e.target.value })}
+                    />
+                  </label>
+                ))}
                 <label>
                   申请原因
                   <textarea
@@ -875,7 +860,7 @@ function App() {
               </form>
             </section>
             <section className="card">
-              <h2>当前领域关键词</h2>
+              <h2>当前关键词</h2>
               {keywords.length === 0 && (
                 <p className="empty">尚未配置关键词。</p>
               )}
@@ -883,11 +868,11 @@ function App() {
                 <article key={k.id} className="keyword">
                   <div className="section-head">
                     <b>
-                      {k.domain} / {k.key}
+                      {k.domain === entryDomain ? String(k.payload.c) : `${k.domain} / ${k.key}`}
                     </b>
-                    <button onClick={() => kwFrom(k)}>选择修改</button>
+                    {k.domain === entryDomain && <button onClick={() => kwFrom(k)}>选择修改</button>}
                   </div>
-                  <pre>{JSON.stringify(k.payload, null, 2)}</pre>
+                  <pre>{k.domain === entryDomain ? keywordText(k.payload) : JSON.stringify(k.payload, null, 2)}</pre>
                   <small>版本 {k.version}</small>
                 </article>
               ))}
@@ -898,12 +883,12 @@ function App() {
                 <article key={c.id} className="keyword">
                   <div className="section-head">
                     <b>
-                      {labels[c.action]} · {c.domain} / {c.key}
+                      {labels[c.action]} · {c.domain === entryDomain ? String(c.payload.c) : `${c.domain} / ${c.key}`}
                     </b>
                     <span className="pill">{labels[c.state]}</span>
                   </div>
                   <p>{c.reason}</p>
-                  <pre>{JSON.stringify(c.payload, null, 2)}</pre>
+                  <pre>{c.domain === entryDomain ? keywordText(c.payload) : JSON.stringify(c.payload, null, 2)}</pre>
                   {c.review_note && <p>审批说明：{c.review_note}</p>}
                   {user.role === "admin" && c.state === "pending" && (
                     <div className="actions">

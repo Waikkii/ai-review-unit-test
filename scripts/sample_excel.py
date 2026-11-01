@@ -15,7 +15,7 @@ for n, domain in enumerate(["射频", "协议"]):
     sheet.append(COLUMNS)
     sheet.append(["TC-001", "基础功能验证", "测试小项 A", "输出值", "常温", "参考门限", "dB", "10", "12", "仅用于演示", "https://intranet.example/evidence/1.jpg"])
     sheet.append(["", "", "测试小项 B", "输出值", "常温", "参考门限", "dB", "10", "8", "", "https://intranet.example/evidence/2.jpg"])
-    sheet.append(["TC-002", "无附件项", "", "", "", "", "", "", "", "", ""])
+    sheet.append(["TC-002", "无附件文字项", "", "", "", "", "", "", "正常", "", ""])
     sheet.merge_cells("A2:A3")
     sheet.merge_cells("B2:B3")
     sheet["K2"].hyperlink = sheet["K2"].value

@@ -8,6 +8,7 @@ from .db import Session, now, uid
 from .models import Run, Result, User
 from .reviewer import review, rule_version
 from .services import audit
+from .keywords import matching_keywords
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def process_once():
                 db.commit()
                 return True
             result_id, fields, domain = result.id, result.fields, result.domain
-            keywords = [k for k in run.keyword_snapshot if k["domain"] == domain]
+            keywords = matching_keywords(run.keyword_snapshot, fields, domain)
             username = db.get(User, run.actor_id).username
         try:
             current_model = "demo" if settings.app_mode == "demo" else settings.ai_model

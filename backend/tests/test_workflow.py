@@ -22,7 +22,7 @@ def workbook_bytes():
     sheet.append(["TC2", "无附件", "", "", "", "", "", "", "", "", ""])
     second = book.create_sheet("协议")
     second.append(COLUMNS)
-    second.append(["TC3", "协议检查", "", "", "", "", "", "", "", "", "https://intranet.example/c.jpg"])
+    second.append(["TC3", "协议检查", "", "", "", "", "", "", "正常", "", "https://intranet.example/c.jpg"])
     out = BytesIO()
     book.save(out)
     book.close()
