@@ -410,6 +410,29 @@ dd {
   overflow-wrap: anywhere;
 }
 .verdict-button:hover { background: transparent; text-decoration: underline; }
+.note-display { width: 100%; min-height: 26px; border: 0; background: transparent; padding: 2px; text-align: left; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.click-note-editor { position: relative; display: flex; align-items: flex-start; gap: 3px; }
+.click-note-editor textarea { min-width: 0; flex: 1; font-size: 11px; padding: 4px; }
+.note-actions { display: flex; flex-direction: column; gap: 3px; }
+.click-note-editor .note-actions button { padding: 2px; min-width: 22px; border: 0; font-size: 12px; margin: 0; }
+.click-note-editor .note-error { position: absolute; top: 100%; left: 0; background: #fff; z-index: 3; }
+.review-state-select { padding: 4px 1px; font-size: 11px; background: #f6fafb; }
+.keyword-cell { overflow-wrap: anywhere; white-space: pre-wrap; }
+.keyword-cell > span { display: block; margin-bottom: 4px; }
+.columns.keyword-workspace { grid-template-columns: minmax(0, 1fr); }
+.keyword-change-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; align-items: end; }
+.keyword-change-form label { margin: 0; }
+.keyword-table-scroll { overflow: auto; max-height: 65vh; }
+.keyword-table { width: 100%; table-layout: fixed; font-size: 12px; }
+.keyword-table th { position: sticky; top: 0; background: #f2f7f8; z-index: 1; }
+.keyword-table td, .keyword-table th { padding: 8px 10px; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
+.keyword-table th:nth-child(5) { width: 30%; }
+.keyword-table th:nth-child(6), .keyword-table th:nth-child(7) { width: 70px; }
+.keyword-table td button { white-space: nowrap; min-width: 46px; padding: 4px 7px; font-size: 12px; }
+.keyword-identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.keyword-identity input { background: #f3f6f8; }
+.keyword-modal { max-height: 90vh; overflow: auto; }
+@media (max-width: 800px) { .keyword-change-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .review-table .row-actions button {
   width: 100%;
   padding: 3px 2px;

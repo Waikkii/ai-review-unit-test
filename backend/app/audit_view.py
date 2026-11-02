@@ -6,6 +6,7 @@ SUMMARY_ACTIONS = {
     "run.export": ("导出审查结果", "download"),
     "keyword.request": ("提交关键词变更", "keyword"),
     "report.clear": ("清除报告历史", "report"),
+    "item.review_state": ("修改审查状态", "review"),
 }
 
 

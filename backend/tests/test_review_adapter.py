@@ -15,16 +15,16 @@ def test_local_review_verdict_contract_and_original_response(client, monkeypatch
     raw = {"model": "local-model", "response": {"value": "12"}}
 
     def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
-        assert attachment_url == ""  # No attachment is an empty string.
+        assert attachment_url == "https://intranet.example/entry"
         return {"status": "passed" if valid else "unknown", "explanation": "审查说明"}, raw
 
     configure_rule(monkeypatch, rule)
     if valid:
-        verdict, returned = review({"单位": "dB", "附件链接": ""}, [{"payload": {"e": "功率"}}], "demo")
+        verdict, returned = review({"单位": "dB", "附件链接": "https://intranet.example/entry"}, [{"payload": {"e": "功率"}}], "demo")
         assert verdict.status == "passed" and returned == raw
     else:
         with pytest.raises(InvalidVerdict) as error:
-            review({"单位": "dB", "附件链接": ""}, [{"payload": {"e": "功率"}}], "demo")
+            review({"单位": "dB", "附件链接": "https://intranet.example/entry"}, [{"payload": {"e": "功率"}}], "demo")
         assert error.value.raw == raw
 
 

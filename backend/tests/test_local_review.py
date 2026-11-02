@@ -81,7 +81,7 @@ def test_local_rule_raw_output_must_be_json_serializable(client, monkeypatch):
     adapter(monkeypatch)
     configure_rule(monkeypatch, lambda *args: ({"status": "needs_review", "explanation": "格式检查"}, {"bytes": b"not-json"}))
     with pytest.raises(TypeError):
-        review({"单位": "", "附件链接": ""}, [{"payload": {"e": "功率"}}], "demo")
+        review({"单位": "", "附件链接": "https://intranet.example/entry"}, [{"payload": {"e": "功率"}}], "demo")
 
 
 @pytest.mark.parametrize("result,status", [("通过", "passed"), (" 通过\n", "passed"),
@@ -92,12 +92,12 @@ def test_local_rule_raw_output_must_be_json_serializable(client, monkeypatch):
     ("passed", "needs_review"), ("failed", "needs_review"), ("unknown", "needs_review"),
     ("", "needs_review"), ("  ", "needs_review")])
 def test_extended_inputs_and_three_string_outputs(client, monkeypatch, result, status):
-    fields = {"单位": "dB", "附件链接": "", "判据门限": "大于等于", "门限": "0", "值": "0.00"}
+    fields = {"单位": "dB", "附件链接": "https://intranet.example/entry", "判据门限": ">=", "门限": "0", "值": "0.00"}
     original = fields.copy()
 
     def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
         assert (unit, keyword, attachment_url, criterion, threshold, value) == (
-            "dB", "功率", "", "大于等于", "0", "0.00")
+            "dB", "功率", "https://intranet.example/entry", ">=", "0", "0.00")
         assert callable(fetchimage)
         return "-10", "0.01", result
 
@@ -115,7 +115,7 @@ def test_extended_inputs_and_three_string_outputs(client, monkeypatch, result, s
 def test_invalid_three_value_output_is_rejected(client, monkeypatch, output):
     configure_rule(monkeypatch, lambda *args: output)
     with pytest.raises(ValueError):
-        review({}, [{"payload": {"e": "功率"}}], "demo")
+        review({"附件链接": "https://intranet.example/entry"}, [{"payload": {"e": "功率"}}], "demo")
 
 
 def test_empty_original_fields_and_unreadable_ai_measurements(client, monkeypatch):
@@ -124,7 +124,7 @@ def test_empty_original_fields_and_unreadable_ai_measurements(client, monkeypatc
         return "", "", "待人工确认"
 
     configure_rule(monkeypatch, rule)
-    verdict, _ = review({}, [{"payload": {"e": "功率"}}], "demo")
+    verdict, _ = review({"附件链接": "https://intranet.example/entry"}, [{"payload": {"e": "功率"}}], "demo")
     assert verdict.ai_threshold == verdict.ai_value == ""
     assert verdict.status == "needs_review"
 

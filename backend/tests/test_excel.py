@@ -115,7 +115,9 @@ def test_detail_upload_edit_review_and_export(client, headers):
     assert process_once()
     results = client.get(f'/api/runs/{run["id"]}/results', headers=h).json()
     assert len(results) == 3
-    assert all(r["status"] == "missing_keyword" for r in results)
+    assert results[0]["explanation"] == "缺少附件"
+    assert not results[0]["pending_review"]
+    assert all(r["status"] == "missing_keyword" for r in results[1:])
     from openpyxl import load_workbook
     exported = client.get(f'/api/runs/{run["id"]}/export', headers=h)
     with BytesIO(exported.content) as stream:

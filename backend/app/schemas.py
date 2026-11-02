@@ -31,6 +31,12 @@ class NoteEdit(StrictModel):
     version: int = Field(ge=0)
 
 
+class ReviewStateEdit(StrictModel):
+    state: Literal["pending", "reviewed"]
+    revision: int = Field(ge=1)
+    reviewed_revision: int = Field(ge=0)
+
+
 class StartReview(StrictModel):
     selection_mode: Literal["full", "missing"] = "full"
 

@@ -34,6 +34,8 @@ type Item = {
   note: string;
   note_version: number;
   pending_review: boolean;
+  review_revision: number;
+  reviewed_revision: number;
   review: Result | null;
 };
 type Result = {
@@ -52,12 +54,17 @@ type Result = {
   note: string;
   note_version: number;
   pending_review?: boolean;
+  review_revision?: number;
+  reviewed_revision?: number;
   stale?: boolean;
 };
 type ReviewRow = {
   itemId: string;
   domain: string;
   fields: Record<string, string>;
+  pendingReview: boolean;
+  reviewRevision: number;
+  reviewedRevision: number;
   note: string;
   noteVersion: number;
   item?: Item;
@@ -170,26 +177,36 @@ function NoteCell({ itemId, note, version, editable }: { itemId: string; note: s
   const [baseVersion, setBaseVersion] = useState(version);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
   const dirty = draft !== saved;
   useEffect(() => {
-    if (!dirty && version > baseVersion) {
+    if (!editing && !dirty && version > baseVersion) {
       setDraft(note); setSaved(note); setBaseVersion(version);
     }
-  }, [note, version, dirty, baseVersion]);
+  }, [note, version, dirty, baseVersion, editing]);
   if (!editable) return <span className="note-text">{note}</span>;
-  return <div className="note-editor">
-    <textarea aria-label="用户备注" rows={2} maxLength={16000} value={draft}
-      disabled={saving} onChange={e => setDraft(e.target.value)} />
-    {dirty && <button disabled={saving} onClick={async () => {
+  const save = async (value: string) => {
       setSaving(true); setError("");
       try {
         const updated = await api<{ note: string; version: number }>(`/items/${itemId}/note`, {
-          method: "PATCH", body: json({ note: draft, version: baseVersion }),
+          method: "PATCH", body: json({ note: value, version: baseVersion }),
         });
-        setSaved(updated.note); setBaseVersion(updated.version);
+        setSaved(updated.note); setDraft(updated.note); setBaseVersion(updated.version); setEditing(false);
       } catch (e) { setError((e as Error).message); }
       finally { setSaving(false); }
-    }}>{saving ? "保存中…" : "保存备注"}</button>}
+  };
+  if (!editing) return <button className="note-display" title="点击编辑备注" onClick={() => {
+    setDraft(saved); setEditing(true); setError("");
+  }}>{saved || <span className="muted">点击添加</span>}</button>;
+  return <div className="note-editor click-note-editor">
+    <textarea autoFocus aria-label="用户备注" rows={2} maxLength={16000} value={draft}
+      disabled={saving} onChange={e => setDraft(e.target.value)} onKeyDown={e => {
+        if (e.key === "Escape" && !saving) { setDraft(saved); setEditing(false); }
+      }} />
+    <div className="note-actions">
+      <button disabled={saving} aria-label="保存备注" title="保存备注" onClick={() => void save(draft)}>✅</button>
+      <button disabled={saving} aria-label="清空备注" title="清空并保存备注" onClick={() => void save("")}>❌</button>
+    </div>
     {error && <span role="alert" className="note-error">{error}</span>}
   </div>;
 }
@@ -251,6 +268,8 @@ function App() {
     [reviewMode, setReviewMode] = useState<"full" | "missing">("full"),
     [authAlert, setAuthAlert] = useState("");
   const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
+  const [keywordDialog, setKeywordDialog] = useState(false);
+  const [reviewRefresh, setReviewRefresh] = useState(0);
   const [action, setAction] = useState("create"),
     [entry, setEntry] = useState<Record<string, string>>(emptyEntry),
     [kwReason, setKwReason] = useState(""),
@@ -301,6 +320,7 @@ function App() {
   useEffect(() => {
     if (!user) return;
     const load = async () => {
+      if (tab === "reports") setKeywords(await api<Keyword[]>("/keywords"));
       if (tab === "keywords") {
         const [k, c] = await Promise.all([
           api<Keyword[]>("/keywords"),
@@ -341,7 +361,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, itemPage, domainFilter, tab, run?.state]);
+  }, [selected, itemPage, domainFilter, tab, run?.state, reviewRefresh]);
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
@@ -407,7 +427,7 @@ function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [run?.id, run?.state, resultPage, filter, domainFilter, tab]);
+  }, [run?.id, run?.state, resultPage, filter, domainFilter, tab, reviewRefresh]);
   const pager = (page: number, setPage: (n: number) => void, count: number) => (
     <div className="pager">
       <button disabled={page === 0} onClick={() => setPage(page - 1)}>
@@ -449,6 +469,7 @@ function App() {
     setEntry(Object.fromEntries(Object.keys(keywordFields).map(key => [key, String(k.payload[key] ?? "")])));
     setAction("update");
     setLinkResult(null);
+    document.querySelector(".keyword-change-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const linkedKeyword = keywords.find(
     (k) => k.domain === entryDomain && ["a", "b", "c", "d"].every(key => k.payload[key] === entry[key]),
@@ -473,7 +494,9 @@ function App() {
       setKeywords(await api<Keyword[]>("/keywords"));
       setKwReason("");
       setLinkResult(null);
-      setNotice("关键词申请已保存");
+      setKeywordDialog(false);
+      setReviewRefresh(value => value + 1);
+      setNotice(user?.role === "admin" ? "关键词已生效，相关项已恢复待审查" : "关键词变更已提交审批");
     });
 
   const adjustKeyword = (row: ReviewRow) => act(async () => {
@@ -488,26 +511,37 @@ function App() {
     if (existing) kwFrom(existing);
     else { setEntry(next); setAction("create"); }
     setLinkResult(row.result?.id ?? null);
-    setKwReason("");
-    setTab("keywords");
+    setKwReason("审查页面调整关键词");
+    setKeywordDialog(true);
+  });
+  const rowKeyword = (row: ReviewRow) => keywords.find(k => k.domain === entryDomain &&
+    Object.entries(keywordFields).filter(([key]) => key !== "e").every(([key, label]) =>
+      k.payload[key] === (row.fields[label] ?? "")));
+  const changeReviewState = (row: ReviewRow, state: string) => act(async () => {
+    await api(`/items/${row.itemId}/review-state`, { method: "PATCH",
+      body: json({ state, revision: row.reviewRevision, reviewed_revision: row.reviewedRevision }) });
+    setReviewRefresh(value => value + 1);
+    setNotice(state === "pending" ? "已设为待审查，查漏补缺会包含此项" : "已设为已审查");
   });
   const tableRows: ReviewRow[] = run
     ? results.map(r => ({ itemId: r.item_id, domain: r.domain, fields: r.fields, note: r.note,
+        pendingReview: r.pending_review ?? true, reviewRevision: r.review_revision ?? 1, reviewedRevision: r.reviewed_revision ?? 0,
         noteVersion: r.note_version, result: r }))
     : items.map(i => ({ itemId: i.id, domain: i.domain, fields: i.current, note: i.note,
+        pendingReview: i.pending_review, reviewRevision: i.review_revision, reviewedRevision: i.reviewed_revision,
         noteVersion: i.note_version, item: i, result: i.review ? { ...i.review, pending_review: i.pending_review } : undefined }));
 
   const reviewTable = () => <div className="review-scroll" aria-label="测试详情表格">
     <table className="review-table">
       <colgroup>
-        {columnWeights.map((weight, index) => <col key={index} style={{ width: `${weight / 106 * 100}%` }} />)}
+        {columnWeights.map((weight, index) => <col key={index} style={{ width: `${weight / columnWeights.reduce((sum, n) => sum + n, 0) * 100}%` }} />)}
       </colgroup>
       <thead>
         <tr className="review-groups">
           <th rowSpan={2} className="domain-cell">领域</th>
           <th colSpan={reportColumns.length}>原始测试详情</th>
           <th colSpan={4} className="ai-group">AI 审查</th>
-          <th rowSpan={2}>当前状态</th><th rowSpan={2} className="row-actions">操作</th>
+          <th rowSpan={2}>当前状态</th><th rowSpan={2} className="row-actions">关键词</th>
         </tr>
         <tr>{reportColumns.map(c => <th key={c}>{c}</th>)}
           <th className="ai-cell">门限</th><th className="ai-cell">值</th>
@@ -530,12 +564,15 @@ function App() {
             title="查看审查依据和建议">{r.result_label || (status === "needs_review" ? "待确认" : labels[status])}</button>}</td>
           <td className="ai-cell"><NoteCell itemId={row.itemId} note={row.note ?? ""}
             version={row.noteVersion ?? 0} editable={canEdit} /></td>
-          <td><span className={`review-state state-${status}`}>
-            {status === "pending" || status === "missing_keyword" ? "待审查" : status === "error" ? "执行失败" : "已审查"}
-          </span></td>
-          <td className="row-actions">{canEdit ? <div className="actions">
-            <button disabled={busy} aria-label="调整关键词" title="调整关键词" onClick={() => void adjustKeyword(row)}>关键词</button>
-          </div> : "只读"}</td>
+          <td>{canEdit ? <select className="review-state-select" aria-label="修改审查状态"
+            value={row.pendingReview ? "pending" : "reviewed"}
+            disabled={busy || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
+            onChange={event => void changeReviewState(row, event.target.value)}>
+            <option value="pending">待审查</option><option value="reviewed">已审查</option>
+          </select> : <span className="review-state">{row.pendingReview ? "待审查" : "已审查"}</span>}</td>
+          <td className="row-actions keyword-cell"><span>{String(rowKeyword(row)?.payload.e ?? "未配置")}</span>
+            {canEdit && <button disabled={busy} aria-label="编辑当前项关键词" title="编辑关键词"
+              onClick={() => void adjustKeyword(row)}>编辑</button>}</td>
         </tr>;
       })}</tbody>
     </table>
@@ -851,7 +888,7 @@ function App() {
                       <span className="muted small">仅筛选展示，审查范围为整份报告</span>
                     </div>
                     <h3>{run ? "审查结果" : "解析后的测试项"}</h3>
-                    {!run && <p className="muted small">原始字段只读。关键词生效后相关项变为待审查，查漏补缺仅处理待审查项。备注填写后点击“保存备注”。</p>}
+                    {!run && <p className="muted small">原始字段只读。关键词生效后相关项变为待审查，查漏补缺仅处理待审查项。备注点击后编辑，✅保存，❌清空；关键词可在本页弹窗修改。</p>}
                     {reviewTable()}
                     {pager(run ? resultPage : itemPage, run ? setResultPage : setItemPage, tableRows.length)}
                   </>
@@ -861,7 +898,7 @@ function App() {
           </>
         )}
         {tab === "keywords" && (
-          <div className="columns">
+          <div className="columns keyword-workspace">
             <section className="card">
               <h2>
                 {user.role === "admin"
@@ -874,7 +911,7 @@ function App() {
                   <button onClick={() => setLinkResult(null)}>取消关联</button>
                 </p>
               )}
-              <form
+              <form className="keyword-change-form"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void submitKeyword();
@@ -926,18 +963,13 @@ function App() {
               {keywords.length === 0 && (
                 <p className="empty">尚未配置关键词。</p>
               )}
-              {keywords.map((k) => (
-                <article key={k.id} className="keyword">
-                  <div className="section-head">
-                    <b>
-                      {k.domain === entryDomain ? String(k.payload.c) : `${k.domain} / ${k.key}`}
-                    </b>
-                    {k.domain === entryDomain && <button onClick={() => kwFrom(k)}>选择修改</button>}
-                  </div>
-                  <pre>{k.domain === entryDomain ? keywordText(k.payload) : JSON.stringify(k.payload, null, 2)}</pre>
-                  <small>版本 {k.version}</small>
-                </article>
-              ))}
+              {keywords.length > 0 && <div className="keyword-table-scroll"><table className="keyword-table">
+                <thead><tr>{Object.values(keywordFields).map(label => <th key={label}>{label}</th>)}<th>版本</th><th>操作</th></tr></thead>
+                <tbody>{keywords.map(k => <tr key={k.id}>
+                  {Object.keys(keywordFields).map(key => <td key={key}>{k.domain === entryDomain ? String(k.payload[key] ?? "") : key === "a" ? k.domain : key === "e" ? JSON.stringify(k.payload) : k.key}</td>)}
+                  <td>{k.version}</td><td>{k.domain === entryDomain && <button onClick={() => kwFrom(k)}>编辑</button>}</td>
+                </tr>)}</tbody>
+              </table></div>}
             </section>
             <section className="card full">
               <h2>{user.role === "admin" ? "关键词审批记录" : "我的申请"}</h2>
@@ -1041,6 +1073,25 @@ function App() {
         <h2>审查已停止</h2><p>{authAlert}</p><p className="muted">请联系管理员处理，重新登录后可继续，或按所选模式重新开始。</p>
         <button className="primary" onClick={() => setAuthAlert("")}>我知道了</button>
       </section></div>}
+      {keywordDialog && <div className="overlay">
+        <section role="dialog" aria-modal="true" aria-label="编辑当前项关键词" className="modal card keyword-modal"
+          onKeyDown={event => { if (event.key === "Escape" && !busy) setKeywordDialog(false); }}>
+          <div className="section-head"><h2>{action === "create" ? "新增当前项关键词" : "编辑当前项关键词"}</h2>
+            <button disabled={busy} onClick={() => setKeywordDialog(false)}>关闭</button></div>
+          <p className="muted small">{user.role === "admin" ? "保存后直接生效，相关测试项恢复待审查。" : "保存后提交审批，批准后生效。"}</p>
+          {error && <p role="alert" className="error">{error}</p>}
+          <form onSubmit={event => { event.preventDefault(); void submitKeyword(); }}>
+            <div className="keyword-identity">{Object.entries(keywordFields).filter(([key]) => key !== "e").map(([key, label]) =>
+              <label key={key}>{label}<input readOnly value={entry[key]} /></label>)}</div>
+            <label>关键词<textarea autoFocus required maxLength={32767} rows={5} value={entry.e}
+              onChange={event => setEntry({ ...entry, e: event.target.value })} /></label>
+            <label>变更原因<textarea required value={kwReason} onChange={event => setKwReason(event.target.value)} /></label>
+            <p className="muted small">当前版本：{linkedKeyword?.version ?? "未配置"}</p>
+            <div className="actions"><button type="button" disabled={busy} onClick={() => setKeywordDialog(false)}>取消</button>
+              <button className="primary" disabled={busy}>{user.role === "admin" ? "保存并生效" : "提交审批"}</button></div>
+          </form>
+        </section>
+      </div>}
       {verdictDetail && <div className="overlay" onClick={() => setVerdictDetail(null)}>
         <section role="dialog" aria-modal="true" aria-label="AI 审查详情" className="modal card verdict-modal"
           onClick={e => e.stopPropagation()}>

@@ -2,6 +2,15 @@
 from sqlalchemy import and_, case, func, or_
 from .models import ItemReviewState, Result, ResultWork
 
+def stored_result_label(status, explanation):
+    labels = {"passed": "通过", "failed": "未通过", "needs_review": "待人工确认",
+              "missing_keyword": "缺少关键词", "error": "执行失败", "pending": "待审查"}
+    if status in {"passed", "missing_keyword", "error", "pending"}:
+        return labels[status]
+    detail = (explanation or "").strip()
+    return labels.get(status, status) if not detail or detail == status else detail
+
+
 def effective_result_expressions():
     pending = or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
     stale = ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)

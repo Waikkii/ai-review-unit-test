@@ -1,5 +1,6 @@
 import importlib
 import json
+import re
 from urllib.parse import urlparse
 from .config import settings
 from .schemas import ReviewVerdict
@@ -16,6 +17,12 @@ def rule_version():
     return str(importlib.import_module(settings.local_review_module).RULE_VERSION)
 
 def review(fields, keywords, username):
+    if not fields.get("附件链接", "").strip():
+        return ReviewVerdict(status="needs_review", explanation="缺少附件"), {
+            "system": True, "reason": "missing_attachment"}
+    if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", fields.get("判据门限", "")):
+        return ReviewVerdict(status="needs_review", explanation="主观类"), {
+            "system": True, "reason": "subjective"}
     payload = keywords[0].get("payload", {}) if len(keywords) == 1 else {}
     keyword_value = payload.get("e")
     if not keywords or (len(keywords) == 1 and (settings.local_review_module or "e" in payload)

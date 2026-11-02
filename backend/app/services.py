@@ -6,6 +6,7 @@ RECORDED_ACTIONS = {
     "report.upload", "report.download", "report.clear", "run.start", "run.finished", "run.export",
     "keyword.request", "keyword.decision", "keyword.create", "keyword.update", "keyword.delete",
     "user.permissions",
+    "item.review_state",
 }
 
 

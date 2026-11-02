@@ -102,6 +102,7 @@ def safe_cell(value):
     return value
 
 def export_excel(original, run, results, measurements=None, notes=None):
+    from .result_filters import stored_result_label
     measurements, notes = measurements or {}, notes or {}
     workbook = load_workbook(BytesIO(original), keep_links=False)
     sheet = workbook.create_sheet("AI审查_" + run.id[:8])
@@ -111,7 +112,7 @@ def export_excel(original, run, results, measurements=None, notes=None):
         measured = measurements.get(result.id)
         values = [result.domain, result.row_number, result.fields.get("测试对象", ""), *[result.fields.get(c, "") for c in COLUMNS],
                   measured.ai_threshold if measured else "", measured.ai_value if measured else "",
-                  ("缺少关键词" if result.status == "missing_keyword" else result.status) if result.status != "pending" else "", notes.get(result.item_id, ""),
+                  stored_result_label(result.status, result.explanation) if result.status != "pending" else "", notes.get(result.item_id, ""),
                   result.status, result.explanation, "\n".join(result.evidence), result.suggestion,
                   run.id, run.revision, run.model, run.rule_version, run.mode]
         sheet.append([safe_cell(v) for v in values])

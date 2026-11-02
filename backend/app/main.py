@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
 from .db import get_db, uid, now
 from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential
-from .schemas import Login, ItemEdit, NoteEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
+from .schemas import Login, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
 from .auth import authenticate, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
@@ -168,7 +168,8 @@ def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, 
           domain: list[str] | None = Query(None),
           user=Depends(current_user), db=Depends(get_db)):
     visible_report(db, report_id, user)
-    query = select(Item, ItemNote, ItemReviewState, Result, ResultMeasurements, ResultWork).outerjoin(ItemNote, ItemNote.item_id == Item.id)
+    _, result_label = effective_result_expressions()
+    query = select(Item, ItemNote, ItemReviewState, Result, ResultMeasurements, ResultWork, result_label).outerjoin(ItemNote, ItemNote.item_id == Item.id)
     query = query.outerjoin(ItemReviewState, ItemReviewState.item_id == Item.id)
     query = query.outerjoin(Result, Result.id == ItemReviewState.source_result_id)
     query = query.outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id).where(Item.report_id == report_id)
@@ -179,12 +180,15 @@ def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, 
     return [{**serial(i, "id report_id domain row_number original current version"),
              "note": note.note if note else "", "note_version": note.version if note else 0,
              "pending_review": is_pending(state),
+             "review_revision": state.revision if state else 1,
+             "reviewed_revision": state.reviewed_revision if state else 0,
              "review": {**serial(result, "id item_id domain row_number fields status explanation evidence suggestion"),
+                        "result_label": label,
                         "ai_threshold": measured.ai_threshold if measured else "",
                         "ai_value": measured.ai_value if measured else ""}
                         if result and (not is_pending(state) or result.status == "missing_keyword"
                             and state.revision == (work.item_revision if work else 1)) else None}
-            for i, note, state, result, measured, work in rows]
+            for i, note, state, result, measured, work, label in rows]
 
 
 @app.get("/api/reports/{report_id}/domains")
@@ -214,6 +218,33 @@ def edit_note(item_id: str, data: NoteEdit, user=Depends(current_user), db=Depen
     audit(db, user, "item.note", item_id, before, after, "用户备注")
     db.commit()
     return after
+
+@app.patch("/api/items/{item_id}/review-state")
+def edit_review_state(item_id: str, data: ReviewStateEdit, user=Depends(current_user), db=Depends(get_db)):
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(404, "测试项不存在")
+    report = visible_report(db, item.report_id, user, write=True)
+    lock_report(db, report)
+    if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(ACTIVE_STATES))):
+        raise HTTPException(409, "请在审查结束后修改审查状态")
+    state = db.get(ItemReviewState, item_id)
+    if state is None:
+        state = ItemReviewState(item_id=item_id, revision=1, reviewed_revision=0)
+        db.add(state)
+        db.flush()
+    if (data.revision, data.reviewed_revision) != (state.revision, state.reviewed_revision):
+        raise HTTPException(409, "审查状态已变化，请刷新后重试")
+    before = {"revision": state.revision, "reviewed_revision": state.reviewed_revision}
+    values = {"revision": state.revision + 1} if data.state == "pending" else {"reviewed_revision": state.revision}
+    updated = db.execute(update(ItemReviewState).where(ItemReviewState.item_id == item_id,
+        ItemReviewState.revision == data.revision, ItemReviewState.reviewed_revision == data.reviewed_revision).values(**values))
+    if updated.rowcount != 1:
+        raise HTTPException(409, "审查状态已变化，请刷新后重试")
+    audit(db, user, "item.review_state", item_id, before,
+          {"state": data.state, "filename": report.filename}, "手动修改审查状态")
+    db.commit()
+    return {"pending_review": data.state == "pending"}
 
 @app.patch("/api/items/{item_id}")
 def edit_item(item_id: str, data: ItemEdit, user=Depends(current_user), db=Depends(get_db)):
@@ -330,6 +361,8 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
              "ai_value": measured.ai_value if measured else "",
              "note": note.note if note else "", "note_version": note.version if note else 0,
              "pending_review": is_pending(state),
+             "review_revision": state.revision if state else 1,
+             "reviewed_revision": state.reviewed_revision if state else 0,
              "result_label": label,
              "stale": bool(state and state.revision > (work.item_revision if work else 1))}
             for r, measured, note, state, work, label in rows]

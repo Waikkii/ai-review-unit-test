@@ -14,9 +14,9 @@ def workbook_bytes():
     sheet = book.active
     sheet.title = "射频"
     sheet.append(COLUMNS)
-    sheet.append(["TC1", "功能测试", "小项 A", "功率", "常温", "大于", "dB", "10", "12", "", "查看图片"])
+    sheet.append(["TC1", "功能测试", "小项 A", "功率", "常温", ">", "dB", "10", "12", "", "查看图片"])
     sheet["K2"].hyperlink = "https://intranet.example/a.jpg"
-    sheet.append(["", "", "小项 B", "功率", "常温", "大于", "dB", "10", "8", "", "https://intranet.example/b.jpg"])
+    sheet.append(["", "", "小项 B", "功率", "常温", ">", "dB", "10", "8", "", "https://intranet.example/b.jpg"])
     sheet.merge_cells("A2:A3")
     sheet.merge_cells("B2:B3")
     sheet.append(["TC2", "无附件", "", "", "", "", "", "", "", "", ""])
