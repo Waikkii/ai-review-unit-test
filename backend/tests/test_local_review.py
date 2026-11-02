@@ -1,4 +1,5 @@
 import sys
+import base64
 import types
 import pytest
 from app.config import settings
@@ -24,7 +25,7 @@ def test_review_receives_unit_keyword_and_url_string_and_downloads_multiple_imag
     original = sys.modules[settings.local_auth_module].fetchimage
 
     def fetch(url, cookies):
-        return original(url, cookies) + [(b"\x89PNG\r\n\x1a\ntest-png", "image/png")]
+        return original(url, cookies) + [(base64.b64encode(b"\x89PNG\r\n\x1a\ntest-png").decode("ascii"), "image/png")]
 
     sys.modules[settings.local_auth_module].fetchimage = fetch
 
@@ -35,8 +36,8 @@ def test_review_receives_unit_keyword_and_url_string_and_downloads_multiple_imag
         entered.append(True)
         images = fetchimage(attachment_url)
         assert len(images) == 2
-        assert images[0][0].startswith(b"\xff\xd8\xff") and images[0][1] == "image/jpeg"
-        assert images[1][0].startswith(b"\x89PNG\r\n\x1a\n") and images[1][1] == "image/png"
+        assert base64.b64decode(images[0][0]).startswith(b"\xff\xd8\xff") and images[0][1] == "image/jpeg"
+        assert base64.b64decode(images[1][0]).startswith(b"\x89PNG\r\n\x1a\n") and images[1][1] == "image/png"
         return {"status": "passed", "explanation": "图片符合门限", "ai_threshold": "10", "ai_value": "8.5"}, {"model": "local-test"}
 
     configure_rule(monkeypatch, rule)

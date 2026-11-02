@@ -1,4 +1,5 @@
 import sys
+import base64
 import types
 import pytest
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +29,7 @@ def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=Fa
             raise CookieExpired()
         if fail_retry:
             raise RuntimeError("do-not-expose-cookie")
-        return [(b"\xff\xd8\xfftest-jpeg", "image/jpeg")]
+        return [(base64.b64encode(b"\xff\xd8\xfftest-jpeg").decode("ascii"), "image/jpeg")]
 
     module.login, module.fetchimage = login, fetch
     monkeypatch.setitem(sys.modules, module.__name__, module)

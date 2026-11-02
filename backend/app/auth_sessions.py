@@ -78,7 +78,7 @@ def _request_images(module, url, cookies):
         raise
 
 
-def download_with_session(url: str, username: str) -> list[tuple[bytes, str]]:
+def download_with_session(url: str, username: str) -> list[tuple[str, str]]:
     module = importlib.import_module(settings.local_auth_module)
     payload, version = _load(username)
     try:

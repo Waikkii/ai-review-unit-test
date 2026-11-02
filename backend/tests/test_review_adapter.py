@@ -1,4 +1,5 @@
 import sys
+import base64
 import pytest
 import httpx
 from app.config import settings
@@ -30,7 +31,7 @@ def test_local_review_verdict_contract_and_original_response(client, monkeypatch
 @pytest.mark.parametrize("images", [
     (b"\xff\xd8\xffone-image", "image/jpeg"),  # Old tuple format is rejected.
     [(b"\xff\xd8\xffvalid", "image/jpeg"), (b"not-a-png", "image/png")],
-    [(b"\xff\xd8\xffvalid", "image/jpeg")] * 11,
+    [("encoded-image", "image/jpeg")] * 11,
     [(b"not-a-gif", "image/gif")],
     [(b"not-a-bmp", "image/bmp")],
     [(b"not-a-bmp", "image/x-ms-bmp")],
@@ -86,7 +87,7 @@ def test_cookie_expired_is_a_signal_exception_not_a_network_stub():
 @pytest.mark.parametrize("old_hosts", ["", "unrelated.example"])
 def test_attachment_hosts_are_unrestricted_even_with_old_whitelist_config(client, monkeypatch, url, old_hosts):
     calls = []
-    image = (b"\xff\xd8\xfftest", "image/jpeg")
+    image = (base64.b64encode(b"\xff\xd8\xfftest").decode("ascii"), "image/jpeg")
 
     def download(address, username):
         calls.append((address, username))
@@ -125,7 +126,7 @@ def test_invalid_attachment_urls_are_still_rejected_before_download(client, monk
 ])
 def test_gif_bmp_and_images_over_previous_size_limit_reach_local_review(client, monkeypatch, header, mime, large):
     content = header + (b"x" * (10 * 1024 * 1024 + 1) if large else b"test-image")
-    expected = [(content, mime)]
+    expected = [(base64.b64encode(content).decode("ascii"), mime)]
     monkeypatch.setattr("app.reviewer.download_with_session", lambda url, user: expected)
 
     def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
@@ -135,3 +136,19 @@ def test_gif_bmp_and_images_over_previous_size_limit_reach_local_review(client, 
     configure_rule(monkeypatch, rule)
     verdict, _ = review({"附件链接": "https://files.intranet/image"}, [{"payload": {"e": "功率"}}], "user")
     assert verdict.status == "passed"
+
+
+def test_base64_content_is_passed_through_without_decoding_or_reencoding(client, monkeypatch):
+    encoded = base64.b64encode(b"GIF89aoriginal-image-content").decode("ascii")
+    monkeypatch.setattr("app.reviewer.download_with_session", lambda url, user: [(encoded, "image/gif")])
+
+    def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
+        images = fetchimage(attachment_url)
+        assert images == [(encoded, "image/gif")]
+        assert isinstance(images[0][0], str)
+        return "10", "12", "通过"
+
+    configure_rule(monkeypatch, rule)
+    verdict, raw = review({"附件链接": "https://files.intranet/image"}, [{"payload": {"e": "功率"}}], "user")
+    assert verdict.status == "passed"
+    assert encoded not in str(raw)

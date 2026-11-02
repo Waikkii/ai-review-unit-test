@@ -30,7 +30,7 @@ def review(fields, keywords, username):
     attachment_url = fields.get("附件链接", "").strip()
     auth_failure = None
 
-    def fetchimage(url: str) -> list[tuple[bytes, str]]:
+    def fetchimage(url: str) -> list[tuple[str, str]]:
         """Bound to the current user; the local rule downloads only when needed."""
         nonlocal auth_failure
         if auth_failure:
@@ -50,18 +50,11 @@ def review(fields, keywords, username):
         validated = []
         for item in images:
             if not isinstance(item, (tuple, list)) or len(item) != 2:
-                raise ValueError("每张图片必须为 (bytes, MIME)")
+                raise ValueError("每张图片必须为 (Base64字符串, MIME)")
             content, mime = item
-            if not isinstance(content, bytes) or mime not in {"image/jpeg", "image/png", "image/gif", "image/bmp", "image/x-ms-bmp"}:
+            if not isinstance(content, str) or mime not in {"image/jpeg", "image/png", "image/gif", "image/bmp", "image/x-ms-bmp"}:
                 raise ValueError("附件格式不符合要求，支持 JPEG、PNG、GIF、BMP")
-            if mime == "image/jpeg" and not content.startswith(b"\xff\xd8\xff"):
-                raise ValueError("无效的 JPEG 图片")
-            if mime == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("无效的 PNG 图片")
-            if mime == "image/gif" and not content.startswith((b"GIF87a", b"GIF89a")):
-                raise ValueError("无效的 GIF 图片")
-            if mime in {"image/bmp", "image/x-ms-bmp"} and not content.startswith(b"BM"):
-                raise ValueError("无效的 BMP 图片")
+            # 本地下载函数已转换为 Base64；原样透传，不解码或重复编码。
             validated.append((content, mime))
         return validated
 

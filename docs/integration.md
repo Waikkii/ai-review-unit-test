@@ -2,9 +2,9 @@
 
 登录和审查统一由被 Git 忽略的 backend/local_adapters 目录提供。
 
-- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password) 返回 {username, cookies}；fetchimage(url, cookies) 返回 [(bytes, MIME), ...]。
+- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password) 返回 {username, cookies}；fetchimage(url, cookies) 返回 [(base64_string, MIME), ...]。
 - LOCAL_REVIEW_MODULE=local_adapters.review_rules：review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage) 返回 (ai_threshold, ai_value, result) 三个字符串，并提供 RULE_VERSION。兼容旧版 (verdict, raw) 返回格式。
-- attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[bytes, str]]]。
+- attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[str, str]]]。
 - 系统先按测试对象、用例编号、用例名称、测试小项匹配 a～d，将 e 列的单个关键词传入。无关键词直接返回“缺少关键词”。
 - 附件主机名和 IP 不受白名单限制，无需配置 ATTACHMENT_HOSTS；旧配置保留也不影响访问。地址仍需为不含账号密码的有效 HTTP/HTTPS URL。图片支持 JPEG/PNG/GIF/BMP，每次最多 10 张，不限制单张图片字节大小；格式按原样传给本地审查函数。
 - verdict 包含 status（passed/failed/needs_review）、explanation、evidence、suggestion、ai_threshold、ai_value；raw 为可 JSON 序列化的 dict。
@@ -50,8 +50,8 @@ review_rules.py 提供 RULE_VERSION 和 review_item(unit, keyword, attachment_ur
 未匹配到关键词或 e 为空时，系统直接返回 missing_keyword（缺少关键词），不调用审查函数、不请求图片/模型。
 该结果保留待审查资格，补齐关键词后可补审。无附件传空字符串；图片不预先下载，由审查函数内部调用系统传入的 fetchimage(url)。
 该回调已绑定当前登录用户，内部调用 login_adapter.fetchimage(url, cookies)，并负责认证重试和图片校验。
-两层 fetchimage 均返回 list[tuple[bytes, str]]，每项是一张图片的 bytes 和 MIME；允许空列表，最多 10 张，不限制单张图片字节大小。MIME 支持 image/jpeg、image/png、image/gif、image/bmp 和 image/x-ms-bmp，并逐张校验对应文件头。GIF 支持 GIF87a/GIF89a。
-对应 Callable[[str], list[tuple[bytes, str]]]。一个附件入口可返回多张图片，系统不拆分 attachment_url 字符串。
+两层 fetchimage 均返回 list[tuple[str, str]]，每项是一张图片的 Base64 字符串和 MIME；允许空列表，最多 10 张，不限制单张图片字节大小。MIME 支持 image/jpeg、image/png、image/gif、image/bmp 和 image/x-ms-bmp。content 由本地下载函数转换为 Base64 字符串，框架不解码、不检查二进制文件头、不重复编码，原样交给本地审查函数。
+对应 Callable[[str], list[tuple[str, str]]]。一个附件入口可返回多张图片，系统不拆分 attachment_url 字符串。
 login 返回 {username, cookies}，cookies 为可序列化的 dict/list；fetchimage 在 Cookie 失效时抛 CookieExpired。
 公共层用当前用户的 Cookie 获取图片，遇 CookieExpired 自动重新登录一次并重试一次。
 CookieExpired 是会话失效信号，不负责 HTTP 请求；带 response.status_code=401/403 的 HTTP 异常也会识别为失效。
