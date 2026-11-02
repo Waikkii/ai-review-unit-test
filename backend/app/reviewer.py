@@ -52,12 +52,16 @@ def review(fields, keywords, username):
             if not isinstance(item, (tuple, list)) or len(item) != 2:
                 raise ValueError("每张图片必须为 (bytes, MIME)")
             content, mime = item
-            if not isinstance(content, bytes) or mime not in {"image/jpeg", "image/png"} or len(content) > 10 * 1024 * 1024:
-                raise ValueError("附件格式或大小不符合要求")
+            if not isinstance(content, bytes) or mime not in {"image/jpeg", "image/png", "image/gif", "image/bmp", "image/x-ms-bmp"}:
+                raise ValueError("附件格式不符合要求，支持 JPEG、PNG、GIF、BMP")
             if mime == "image/jpeg" and not content.startswith(b"\xff\xd8\xff"):
                 raise ValueError("无效的 JPEG 图片")
             if mime == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise ValueError("无效的 PNG 图片")
+            if mime == "image/gif" and not content.startswith((b"GIF87a", b"GIF89a")):
+                raise ValueError("无效的 GIF 图片")
+            if mime in {"image/bmp", "image/x-ms-bmp"} and not content.startswith(b"BM"):
+                raise ValueError("无效的 BMP 图片")
             validated.append((content, mime))
         return validated
 

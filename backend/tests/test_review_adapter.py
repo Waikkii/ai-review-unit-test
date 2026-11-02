@@ -31,6 +31,9 @@ def test_local_review_verdict_contract_and_original_response(client, monkeypatch
     (b"\xff\xd8\xffone-image", "image/jpeg"),  # Old tuple format is rejected.
     [(b"\xff\xd8\xffvalid", "image/jpeg"), (b"not-a-png", "image/png")],
     [(b"\xff\xd8\xffvalid", "image/jpeg")] * 11,
+    [(b"not-a-gif", "image/gif")],
+    [(b"not-a-bmp", "image/bmp")],
+    [(b"not-a-bmp", "image/x-ms-bmp")],
 ])
 def test_multi_image_return_format_and_each_image_are_validated(client, monkeypatch, images):
     adapter(monkeypatch)
@@ -113,3 +116,22 @@ def test_invalid_attachment_urls_are_still_rejected_before_download(client, monk
     monkeypatch.setattr("app.reviewer.download_with_session", download)
     with pytest.raises(ValueError):
         review({"附件链接": url}, [{"payload": {"e": "功率"}}], "current-user")
+
+
+@pytest.mark.parametrize("header,mime,large", [
+    (b"GIF87a", "image/gif", False), (b"GIF89a", "image/gif", False),
+    (b"BM", "image/bmp", False), (b"BM", "image/x-ms-bmp", False),
+    (b"BM", "image/bmp", True), (b"\xff\xd8\xff", "image/jpeg", True),
+])
+def test_gif_bmp_and_images_over_previous_size_limit_reach_local_review(client, monkeypatch, header, mime, large):
+    content = header + (b"x" * (10 * 1024 * 1024 + 1) if large else b"test-image")
+    expected = [(content, mime)]
+    monkeypatch.setattr("app.reviewer.download_with_session", lambda url, user: expected)
+
+    def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
+        assert fetchimage(attachment_url) == expected
+        return "10", "12", "通过"
+
+    configure_rule(monkeypatch, rule)
+    verdict, _ = review({"附件链接": "https://files.intranet/image"}, [{"payload": {"e": "功率"}}], "user")
+    assert verdict.status == "passed"
