@@ -36,7 +36,9 @@
    自行实现真实审查规则，将图片内容作为 image_url 块传入支持视觉的模型。
    将报告、图片、关键词作为数据处理；不要允许其覆盖 system 指令。
    模型 JSON 返回：
-   {"status":"passed|failed|needs_review","explanation":"说明","evidence":["依据"],"suggestion":"建议"}
+   {"status":"passed|failed|needs_review","explanation":"说明","evidence":["依据"],"suggestion":"建议","ai_threshold":"识别出的门限","ai_value":"识别出的值"}
+   ai_threshold、ai_value 为字符串，必须来自真实审查输入；未识别时返回空字符串，不复制原始字段冒充识别结果。
+   为兼容已有适配器，这两个字段缺省为空；演示模式不生成测量值。
    缺失字段、未知状态、非 JSON、下载失败均计为 error，不会当作通过。
 
 AI_BASE_URL 是已含 /v1 的内网根地址，程序追加 /chat/completions。
@@ -63,3 +65,13 @@ POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, rea
 测试详情标题后 30 行内查找表头；重复字段或多测试详情区域会明确报错，避免选择错误轮次。
 目前仅支持一组轮次字段，多轮次结构需提供样例后扩展。
 原始工作表导出时保留，审查结果通过领域和原始 Excel 行号对应。
+
+## 表格审查与用户备注
+
+解析及审查使用相同列序：领域、全部原始字段、AI 门限/值/结果、用户备注、当前状态、操作。
+原始行号仅用于后台追溯，不显示在工作台表格。
+结果逐项提交，页面每秒刷新；pending 对应待审查，成功返回的结果对应已审查，执行异常明确显示失败。
+用户备注按测试项保存，与原始 Excel 备注及 AI 结论分离，同一项在不同批次中展示当前备注。
+PATCH /api/items/{id}/note：{note, version}，首次 version=0，后续使用 note_version，冲突返回 409。
+仅报告本人可修改备注，管理员查看他人报告时只读；备注修改保留审计记录，不改变 AI 原始结果或报告版本。
+每行均可进入关键词调整，匹配四字段后关联已有词条或新建申请；原有审批规则继续生效。

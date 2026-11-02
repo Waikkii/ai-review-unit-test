@@ -8,8 +8,8 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
 from .db import get_db, uid
-from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit
-from .schemas import Login, ItemEdit, KeywordChange, KeywordEntryChange, Decision, UserChange
+from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements
+from .schemas import Login, ItemEdit, NoteEdit, KeywordChange, KeywordEntryChange, Decision, UserChange
 from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
 from .auth import authenticate, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
@@ -123,8 +123,33 @@ def upload(file: UploadFile = File(...), user=Depends(current_user), db=Depends(
 def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
           user=Depends(current_user), db=Depends(get_db)):
     visible_report(db, report_id, user)
-    return [serial(i, "id report_id domain row_number original current version") for i in db.scalars(
-        select(Item).where(Item.report_id == report_id).order_by(Item.domain, Item.row_number).offset(offset).limit(limit))]
+    rows = db.execute(select(Item, ItemNote).outerjoin(ItemNote, ItemNote.item_id == Item.id)
+        .where(Item.report_id == report_id).order_by(Item.domain, Item.row_number).offset(offset).limit(limit))
+    return [{**serial(i, "id report_id domain row_number original current version"),
+             "note": note.note if note else "", "note_version": note.version if note else 0} for i, note in rows]
+
+
+@app.patch("/api/items/{item_id}/note")
+def edit_note(item_id: str, data: NoteEdit, user=Depends(current_user), db=Depends(get_db)):
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(404, "测试项不存在")
+    visible_report(db, item.report_id, user, write=True)
+    note = db.get(ItemNote, item_id)
+    before = {"note": note.note, "version": note.version} if note else {"note": "", "version": 0}
+    if data.version != before["version"]:
+        raise HTTPException(409, "备注已被修改，请刷新后重试")
+    if note:
+        updated = db.execute(update(ItemNote).where(ItemNote.item_id == item_id,
+            ItemNote.version == data.version).values(note=data.note, version=data.version + 1))
+        if updated.rowcount != 1:
+            raise HTTPException(409, "备注已被修改，请刷新后重试")
+    else:
+        db.add(ItemNote(item_id=item_id, note=data.note, version=1))
+    after = {"note": data.note, "version": data.version + 1}
+    audit(db, user, "item.note", item_id, before, after, "用户备注")
+    db.commit()
+    return after
 
 @app.patch("/api/items/{item_id}")
 def edit_item(item_id: str, data: ItemEdit, user=Depends(current_user), db=Depends(get_db)):
@@ -191,16 +216,28 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
     q = select(Result).where(Result.run_id == run_id)
     if status:
         q = q.where(Result.status == status)
-    return [serial(r, "id item_id domain row_number fields status explanation evidence suggestion raw")
-            for r in db.scalars(q.order_by(Result.domain, Result.row_number).offset(offset).limit(limit))]
+    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote)
+        .outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id)
+        .outerjoin(ItemNote, ItemNote.item_id == Result.item_id)
+        .order_by(Result.domain, Result.row_number).offset(offset).limit(limit))
+    return [{**serial(r, "id item_id domain row_number fields status explanation evidence suggestion raw"),
+             "ai_threshold": measured.ai_threshold if measured else "",
+             "ai_value": measured.ai_value if measured else "",
+             "note": note.note if note else "", "note_version": note.version if note else 0}
+            for r, measured, note in rows]
 
 @app.get("/api/runs/{run_id}/export")
 def export(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     run = visible_run(db, run_id, user)
     if run.state in {"queued", "running"}:
         raise HTTPException(409, "请等待本批次审查结束")
+    result_rows = db.scalars(select(Result).where(Result.run_id == run.id).order_by(Result.domain, Result.row_number)).all()
+    measurements = {m.result_id: m for m in db.scalars(select(ResultMeasurements).join(Result)
+        .where(Result.run_id == run.id))}
+    notes = {n.item_id: n.note for n in db.scalars(select(ItemNote).join(Item)
+        .where(Item.report_id == run.report_id))}
     content = export_excel((settings.data_dir / (run.report_id + ".xlsx")).read_bytes(), run,
-        db.scalars(select(Result).where(Result.run_id == run.id).order_by(Result.domain, Result.row_number)).all())
+                           result_rows, measurements, notes)
     audit(db, user, "run.export", run.id)
     db.commit()
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -223,8 +260,8 @@ def request_change(data: KeywordChange, user=Depends(current_user), db=Depends(g
         visible_report(db, run.report_id, user, write=True)
         same_item = (matches_entry(data.payload, result.fields) if data.domain == ENTRY_DOMAIN
                      else result.domain == data.domain)
-        if not same_item or result.status not in {"failed", "needs_review", "error"}:
-            raise HTTPException(422, "关联项必须匹配关键词适用对象且需要处理")
+        if not same_item:
+            raise HTTPException(422, "关联项必须匹配关键词适用对象")
     existing = db.scalar(select(Keyword).where(Keyword.domain == data.domain, Keyword.key == data.key))
     if data.action == "create":
         if existing or data.base_version != 0:

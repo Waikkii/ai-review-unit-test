@@ -26,6 +26,11 @@ class ItemEdit(StrictModel):
             raise ValueError("审查项的值不能为空")
         return value
 
+class NoteEdit(StrictModel):
+    note: str = Field(max_length=16000)
+    version: int = Field(ge=0)
+
+
 class KeywordChange(StrictModel):
     action: Literal["create", "update", "delete"]
     domain: str = Field(min_length=1, max_length=128)
@@ -80,3 +85,5 @@ class ReviewVerdict(StrictModel):
     explanation: str = Field(min_length=1, max_length=16000)
     evidence: list[str] = Field(default_factory=list, max_length=100)
     suggestion: str = Field(default="", max_length=16000)
+    ai_threshold: str = Field(default="", max_length=16000)
+    ai_value: str = Field(default="", max_length=16000)

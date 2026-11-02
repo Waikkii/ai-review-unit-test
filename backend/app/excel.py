@@ -105,13 +105,17 @@ def safe_cell(value):
         return "'" + value
     return value
 
-def export_excel(original, run, results):
+def export_excel(original, run, results, measurements=None, notes=None):
+    measurements, notes = measurements or {}, notes or {}
     workbook = load_workbook(BytesIO(original), keep_links=False)
     sheet = workbook.create_sheet("AI审查_" + run.id[:8])
-    sheet.append(["领域", "原始行号", "测试对象", *COLUMNS, "审查状态", "问题说明", "判断依据", "修改建议",
+    sheet.append(["领域", "原始行号", "测试对象", *COLUMNS, "AI门限", "AI值", "AI结果", "用户备注", "审查状态", "问题说明", "判断依据", "修改建议",
                   "审查批次", "报告版本", "模型", "规则版本", "运行模式"])
     for result in results:
+        measured = measurements.get(result.id)
         values = [result.domain, result.row_number, result.fields.get("测试对象", ""), *[result.fields.get(c, "") for c in COLUMNS],
+                  measured.ai_threshold if measured else "", measured.ai_value if measured else "",
+                  result.status if result.status != "pending" else "", notes.get(result.item_id, ""),
                   result.status, result.explanation, "\n".join(result.evidence), result.suggestion,
                   run.id, run.revision, run.model, run.rule_version, run.mode]
         sheet.append([safe_cell(v) for v in values])

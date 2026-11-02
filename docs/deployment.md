@@ -16,6 +16,8 @@ ATTACHMENT_HOSTS=内网图片主机名
 在 PostgreSQL 创建数据库和专用账号，授予首次建表权限。执行一次 init 后，API/Worker 使用仅允许业务表所需读写的运行账号。
 审计表 audit 应在数据库权限层禁止运行账号 UPDATE/DELETE，以加强追加记录约束。
 第一版通过 create_all 初始化 v1；未来结构变更需配套迁移，create_all 不用于升级旧表。
+表格审查版提供增量升级：停止 API/Worker 后，用项目虚拟环境执行 `python scripts/run.py migrate`，
+补建 item_notes 和 result_measurements 两张表，保留现有数据；可重复执行。Windows 一键脚本自动执行此步骤。
 
 生产环境同目录共享 .env、data、数据库配置。原始 Excel 文件留在服务端磁盘，不随意清理。
 Windows 通过 NTFS ACL 仅向服务账号开放 .env、data；Linux .env 权限 600，data 目录 700。

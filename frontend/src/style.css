@@ -338,6 +338,97 @@ dd {
 .table-scroll {
   overflow: auto;
 }
+.review-scroll {
+  max-height: 68vh;
+  border: 1px solid #e0e6ec;
+  border-radius: 8px;
+}
+.review-table {
+  width: 2800px;
+  min-width: 2800px;
+  table-layout: fixed;
+}
+.review-table th,
+.review-table td {
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.review-table thead th {
+  position: sticky;
+  top: 40px;
+  z-index: 2;
+}
+.review-table .review-groups th {
+  top: 0;
+  height: 40px;
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+.review-table .ai-cell,
+.review-table .ai-group {
+  background: #f0f8f6;
+}
+.review-table .domain-cell {
+  position: sticky;
+  left: 0;
+  width: 100px;
+  min-width: 100px;
+  background: #f8fafc;
+  z-index: 1;
+}
+.review-table thead .domain-cell,
+.review-table thead .row-actions {
+  z-index: 3;
+}
+.review-table .row-actions {
+  position: sticky;
+  right: 0;
+  width: 170px;
+  min-width: 170px;
+  background: white;
+  box-shadow: -2px 0 3px #1025370d;
+  z-index: 1;
+}
+.review-table .row-actions .actions {
+  display: grid;
+}
+.note-editor textarea {
+  min-height: 66px;
+  padding: 6px;
+  font-size: 12px;
+}
+.note-editor button {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.note-error {
+  display: block;
+  font-size: 12px;
+  color: #9c3535;
+}
+.verdict-detail summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.verdict-detail p {
+  margin: 8px 0;
+  font-size: 12px;
+}
+.verdict-passed { color: #27724b; }
+.verdict-failed, .verdict-error { color: #a14638; }
+.verdict-needs_review { color: #8e6f21; }
+.review-state {
+  display: inline-block;
+  white-space: nowrap;
+  border-radius: 5px;
+  padding: 3px 7px;
+  background: #e5f5eb;
+  color: #27724b;
+  font-size: 12px;
+}
+.state-pending { background: #f0f3f7; color: #758496; }
+.state-error { background: #fde9e5; color: #a14638; }
 table {
   width: 100%;
   border-collapse: collapse;

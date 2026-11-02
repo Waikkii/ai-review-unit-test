@@ -137,6 +137,8 @@ try {
             Stop-ServiceProcess 'api'
         }
         Build-Frontend
+        & $pythonExe (Join-Path $PSScriptRoot 'run.py') migrate
+        if ($LASTEXITCODE -ne 0) { throw 'Database upgrade failed. API and Worker were not started.' }
         if (-not (Get-OwnedProcess $state['api'])) {
             $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
             if ($listener) { throw "Port $Port is occupied. Stop the existing API before using this launcher." }

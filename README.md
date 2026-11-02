@@ -12,7 +12,7 @@ React + TypeScript / FastAPI / SQLAlchemy / PostgreSQL / 独立 Python Worker。
 - 原始字段修订与版本冲突保护；审查结论人工修改第一版不开放。
 - 持久化任务、实时进度、单报告一个活动任务、Worker 租约及中断恢复、逐项失败记录。
 - 每批次固定字段/关键词快照、模型、规则版本、运行模式及 AI 原始返回；历史不覆盖。
-- 结果中通过项默认折叠，其他项展开；结果、报告、审查历史、审批、日志支持分页。
+- 解析和审查使用相同表格，显示全部原始字段与 AI 门限/值/结果、用户备注，逐项刷新状态；保留结果筛选及各列表分页。
 - 关键词业务结构为 a～e 五个 TEXT 字段，a～d（测试对象、用例编号、用例名称、测试小项）全库联合唯一，e 为单个关键词；按四字段精确匹配。普通用户新增/修改/删除需审批，管理员直接生效，版本冲突保护与软删除。
 - 原始 Excel 下载；导出保留原始 Sheet 并新增该批次全部审查字段和结论 Sheet。
 - 上传、登录、修订、发起审查、逐项结果、审批、关键词生效、权限、下载与导出均记录审计。
@@ -46,7 +46,7 @@ scripts/setup.py 生成未纳入 Git 的 .env，演示账号 demo、admin，随�
 已有手动启动的 API/Worker 请先关闭，再使用一键脚本。
 初次构建需要 Node.js、pnpm 和可用的依赖源/缓存；构建完成且源码未变化时，日常启动不需要构建工具或联网。
 如果更新修改了后端依赖，先运行 `.venv\Scripts\python -m pip install -r backend/requirements.lock.txt`。
-脚本不会重新生成 `.env` 或初始化/清空数据库。
+脚本不会重新生成 `.env` 或清空数据库；启动前自动补建用户备注和 AI 测量值所需的新表。
 可用 PowerShell 查看状态：`powershell -NoProfile -File scripts/manage.ps1 -Action status`。
 默认仅本机访问；需要内网访问时使用 `start.cmd -BindAddress 你的内网IP`，重建时同样传给 `rebuild-start.cmd`。
 成功启动后会在本地保存该地址，后续双击启动或重新构建会沿用；可再次传入 `-BindAddress` 更换地址。
@@ -88,6 +88,9 @@ pnpm run build
 
 测试覆盖越权、管理员只读、修订冲突、快照、审批冲突、即时停用、任务租约恢复、并发领取、导出与链接白名单。
 SQLite 用于快速自动化测试；PostgreSQL 并发和真实内网接口、实际 1500 行/30 人负载仍需目标环境验证。
+
+已有安装升级到表格审查版：Windows 使用 `rebuild-start.cmd` 自动补建新表；手动启动或 Linux 部署前执行
+`python scripts/run.py migrate`（使用项目虚拟环境）。升级仅新增表，不重写历史报告或 AI 结果。
 
 ## 目录
 

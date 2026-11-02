@@ -66,6 +66,20 @@ class Result(Base):
     raw: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("run_id", "item_id"),)
 
+class ResultMeasurements(Base):
+    __tablename__ = "result_measurements"
+    result_id: Mapped[str] = mapped_column(ForeignKey("results.id"), primary_key=True)
+    ai_threshold: Mapped[str] = mapped_column(Text, default="")
+    ai_value: Mapped[str] = mapped_column(Text, default="")
+
+
+class ItemNote(Base):
+    __tablename__ = "item_notes"
+    item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class Keyword(Base):
     __tablename__ = "keywords"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

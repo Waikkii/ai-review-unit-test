@@ -28,6 +28,8 @@ type Item = {
   row_number: number;
   current: Record<string, string>;
   version: number;
+  note: string;
+  note_version: number;
 };
 type Result = {
   id: string;
@@ -39,6 +41,19 @@ type Result = {
   explanation: string;
   evidence: string[];
   suggestion: string;
+  ai_threshold: string;
+  ai_value: string;
+  note: string;
+  note_version: number;
+};
+type ReviewRow = {
+  itemId: string;
+  domain: string;
+  fields: Record<string, string>;
+  note: string;
+  noteVersion: number;
+  item?: Item;
+  result?: Result;
 };
 type Keyword = {
   id: string;
@@ -120,6 +135,37 @@ const entryDomain = "__five_column_keywords__";
 const emptyEntry = () => ({ a: "", b: "", c: "", d: "", e: "" });
 const keywordText = (payload: Record<string, unknown>) =>
   Object.entries(keywordFields).map(([key, label]) => `${label}：${String(payload[key] ?? "")}`).join("\n");
+const reportColumns = ["测试对象", "用例编号", "用例名称", "测试小项", "指标名称", "测试条件", "判据门限", "单位", "门限", "值", "备注", "附件链接"];
+
+function NoteCell({ itemId, note, version, editable }: { itemId: string; note: string; version: number; editable: boolean }) {
+  const [draft, setDraft] = useState(note);
+  const [saved, setSaved] = useState(note);
+  const [baseVersion, setBaseVersion] = useState(version);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const dirty = draft !== saved;
+  useEffect(() => {
+    if (!dirty && version > baseVersion) {
+      setDraft(note); setSaved(note); setBaseVersion(version);
+    }
+  }, [note, version, dirty, baseVersion]);
+  if (!editable) return <span className="note-text">{note}</span>;
+  return <div className="note-editor">
+    <textarea aria-label="用户备注" rows={2} maxLength={16000} value={draft}
+      disabled={saving} onChange={e => setDraft(e.target.value)} />
+    {dirty && <button disabled={saving} onClick={async () => {
+      setSaving(true); setError("");
+      try {
+        const updated = await api<{ note: string; version: number }>(`/items/${itemId}/note`, {
+          method: "PATCH", body: json({ note: draft, version: baseVersion }),
+        });
+        setSaved(updated.note); setBaseVersion(updated.version);
+      } catch (e) { setError((e as Error).message); }
+      finally { setSaving(false); }
+    }}>{saving ? "保存中…" : "保存备注"}</button>}
+    {error && <span role="alert" className="note-error">{error}</span>}
+  </div>;
+}
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
@@ -261,7 +307,7 @@ function App() {
   useEffect(() => {
     if (!run) return;
     let cancelled = false;
-    setResults([]);
+    let timer: number | undefined;
     const poll = async () => {
       try {
         const [r, rows] = await Promise.all([
@@ -283,14 +329,14 @@ function App() {
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       }
+      if (!cancelled && ["queued", "running"].includes(run.state)) {
+        timer = window.setTimeout(poll, 1000);
+      }
     };
     void poll();
-    const timer = ["queued", "running"].includes(run.state)
-      ? window.setInterval(poll, 2000)
-      : undefined;
     return () => {
       cancelled = true;
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [run?.id, run?.state, resultPage, filter]);
   const pager = (page: number, setPage: (n: number) => void, count: number) => (
@@ -307,12 +353,14 @@ function App() {
   const chooseReport = (r: Report) => {
     setSelected(r);
     setRun(null);
+    setResults([]);
     setItemPage(0);
     setRunPage(0);
     setResultPage(0);
     setFilter("");
   };
   const chooseRun = (r: Run) => {
+    setResults([]);
     setRun(r);
     setResultPage(0);
     setFilter("");
@@ -347,6 +395,79 @@ function App() {
       setLinkResult(null);
       setNotice("关键词申请已保存");
     });
+
+  const adjustKeyword = (row: ReviewRow) => act(async () => {
+    const entries = await api<Keyword[]>("/keywords");
+    setKeywords(entries);
+    const next = {
+      a: row.fields["测试对象"] ?? "", b: row.fields["用例编号"] ?? "",
+      c: row.fields["用例名称"] ?? "", d: row.fields["测试小项"] ?? "", e: "",
+    };
+    const existing = entries.find(k => k.domain === entryDomain &&
+      ["a", "b", "c", "d"].every(key => k.payload[key] === next[key as keyof typeof next]));
+    if (existing) kwFrom(existing);
+    else { setEntry(next); setAction("create"); }
+    setLinkResult(row.result?.id ?? null);
+    setKwReason("");
+    setTab("keywords");
+  });
+  const tableRows: ReviewRow[] = run
+    ? results.map(r => ({ itemId: r.item_id, domain: r.domain, fields: r.fields, note: r.note,
+        noteVersion: r.note_version, result: r }))
+    : items.map(i => ({ itemId: i.id, domain: i.domain, fields: i.current, note: i.note,
+        noteVersion: i.note_version, item: i }));
+
+  const reviewTable = () => <div className="table-scroll review-scroll" tabIndex={0} aria-label="测试详情表格，可横向滚动">
+    <table className="review-table">
+      <colgroup>
+        <col style={{ width: 100 }} />
+        {reportColumns.map(c => <col key={c} style={{ width: 145 }} />)}
+        {["threshold", "value", "result", "note"].map(c => <col key={c} style={{ width: 170 }} />)}
+        <col style={{ width: 110 }} /><col style={{ width: 170 }} />
+      </colgroup>
+      <thead>
+        <tr className="review-groups">
+          <th rowSpan={2} className="domain-cell">领域</th>
+          <th colSpan={reportColumns.length}>原始测试详情</th>
+          <th colSpan={4} className="ai-group">AI 审查</th>
+          <th rowSpan={2}>当前状态</th><th rowSpan={2} className="row-actions">操作</th>
+        </tr>
+        <tr>{reportColumns.map(c => <th key={c}>{c}</th>)}
+          <th className="ai-cell">门限</th><th className="ai-cell">值</th>
+          <th className="ai-cell">结果</th><th className="ai-cell">备注</th>
+        </tr>
+      </thead>
+      <tbody>{tableRows.map(row => {
+        const r = row.result;
+        const status = r?.status ?? "pending";
+        const canEdit = selected?.owner_id === user?.id;
+        return <tr key={row.itemId} className={`review-row review-${status}`}>
+          <td className="domain-cell">{row.domain}</td>
+          {reportColumns.map(c => <td key={c}>{row.fields[c] ?? ""}</td>)}
+          <td className="ai-cell">{r?.ai_threshold ?? ""}</td>
+          <td className="ai-cell">{r?.ai_value ?? ""}</td>
+          <td className="ai-cell">{r && status !== "pending" && <details className="verdict-detail">
+            <summary className={`verdict-${status}`}>{labels[status]}</summary>
+            <p>{r.explanation}</p>
+            {!!r.evidence.length && <p>依据：{r.evidence.join("；")}</p>}
+            {r.suggestion && <p>建议：{r.suggestion}</p>}
+          </details>}</td>
+          <td className="ai-cell"><NoteCell itemId={row.itemId} note={row.note ?? ""}
+            version={row.noteVersion ?? 0} editable={canEdit} /></td>
+          <td><span className={`review-state state-${status}`}>
+            {status === "pending" ? "待审查" : status === "error" ? "执行失败" : "已审查"}
+          </span></td>
+          <td className="row-actions">{canEdit ? <div className="actions">
+            <button disabled={busy} onClick={() => void adjustKeyword(row)}>调整关键词</button>
+            {row.item && <button onClick={() => {
+              setEdit(row.item!); setEditFields({ ...row.fields }); setReason("");
+            }}>修订字段</button>}
+          </div> : "只读"}</td>
+        </tr>;
+      })}</tbody>
+    </table>
+    {!tableRows.length && <p className="empty">{run ? "当前筛选暂无结果。" : "暂无测试项。"}</p>}
+  </div>;
   if (!user)
     return (
       <main className="login">
@@ -569,7 +690,7 @@ function App() {
                     <div className="section-head">
                       <div>
                         <h2>{selected.filename}</h2>
-                        <p>{selected.item_count} 个待审查测试项</p>
+                        <p>{selected.item_count} 个测试项</p>
                       </div>
                       <div className="actions">
                         <button
@@ -596,6 +717,7 @@ function App() {
                                   { method: "POST" },
                                 );
                                 chooseRun(r);
+                                setResultPage(itemPage);
                                 setNotice("审查已提交，等待后台进程执行");
                               })
                             }
@@ -619,179 +741,35 @@ function App() {
                       ))}
                     </div>
                     {pager(runPage, setRunPage, runs.length)}
-                    {run ? (
-                      <>
-                        <div className="progress-head">
-                          <b>
-                            {labels[run.state]} · {run.completed}/{run.total}
-                          </b>
-                          <span>{run.failed} 项执行失败</span>
+                    {run && <>
+                      <div className="progress-head">
+                        <b>{labels[run.state]} · {run.completed}/{run.total}</b>
+                        <span>{run.failed} 项执行失败</span>
+                      </div>
+                      <progress max={run.total || 1} value={run.completed} />
+                      <p className="muted small">批次版本 {run.revision} · 模型 {run.model} · {run.mode}</p>
+                      <div className="section-head">
+                        <select aria-label="筛选审查状态" value={filter} onChange={e => {
+                          setFilter(e.target.value); setResultPage(0);
+                        }}>
+                          <option value="">全部审查结果</option>
+                          {["passed", "failed", "needs_review", "error", "pending"].map(s => (
+                            <option key={s} value={s}>{s === "pending" ? "待审查" : labels[s]}</option>
+                          ))}
+                        </select>
+                        <div className="actions">
+                          <button onClick={() => { setItemPage(resultPage); setRun(null); }}>查看并修订测试项</button>
+                          <button disabled={["queued", "running"].includes(run.state) || busy}
+                            onClick={() => void act(async () => {
+                              await download("/runs/" + run.id + "/export", "审查结果-" + run.id.slice(0, 8) + ".xlsx");
+                            })}>导出 Excel</button>
                         </div>
-                        <progress max={run.total || 1} value={run.completed} />
-                        <p className="muted small">
-                          批次版本 {run.revision} · 模型 {run.model} ·{" "}
-                          {run.mode}
-                        </p>
-                        <div className="section-head">
-                          <select
-                            aria-label="筛选审查状态"
-                            value={filter}
-                            onChange={(e) => {
-                              setFilter(e.target.value);
-                              setResultPage(0);
-                            }}
-                          >
-                            <option value="">全部审查结果</option>
-                            {[
-                              "passed",
-                              "failed",
-                              "needs_review",
-                              "error",
-                              "pending",
-                            ].map((s) => (
-                              <option key={s} value={s}>
-                                {labels[s]}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="actions">
-                            <button onClick={() => setRun(null)}>
-                              查看并修订测试项
-                            </button>
-                            <button
-                              disabled={
-                                ["queued", "running"].includes(run.state) ||
-                                busy
-                              }
-                              onClick={() =>
-                                void act(async () => {
-                                  await download(
-                                    "/runs/" + run.id + "/export",
-                                    "审查结果-" + run.id.slice(0, 8) + ".xlsx",
-                                  );
-                                })
-                              }
-                            >
-                              导出 Excel
-                            </button>
-                          </div>
-                        </div>
-                        {results.map((r) => (
-                          <details
-                            className={"result " + r.status}
-                            key={r.id}
-                            open={r.status !== "passed"}
-                          >
-                            <summary>
-                              <span className="status">{labels[r.status]}</span>
-                              <strong>
-                                {r.fields["用例名称"] || r.fields["用例编号"]}
-                              </strong>
-                              <span>
-                                {r.domain} · 第 {r.row_number} 行
-                              </span>
-                            </summary>
-                            <dl>
-                              {Object.entries(r.fields).map(([k, v]) => (
-                                <React.Fragment key={k}>
-                                  <dt>{k}</dt>
-                                  <dd>{v || "—"}</dd>
-                                </React.Fragment>
-                              ))}
-                            </dl>
-                            <p>
-                              <b>问题说明：</b>
-                              {r.explanation || "等待执行"}
-                            </p>
-                            {r.evidence.length > 0 && (
-                              <p>
-                                <b>判断依据：</b>
-                                {r.evidence.join("；")}
-                              </p>
-                            )}
-                            {r.suggestion && (
-                              <p>
-                                <b>建议：</b>
-                                {r.suggestion}
-                              </p>
-                            )}
-                            {selected.owner_id === user.id &&
-                              ["failed", "needs_review", "error"].includes(
-                                r.status,
-                              ) && (
-                                <button
-                                  onClick={() => {
-                                    setLinkResult(r.id);
-                                    setEntry({
-                                      a: r.fields["测试对象"] ?? "",
-                                      b: r.fields["用例编号"] ?? "",
-                                      c: r.fields["用例名称"] ?? "",
-                                      d: r.fields["测试小项"] ?? "",
-                                      e: "",
-                                    });
-                                    setAction("create");
-                                    setTab("keywords");
-                                  }}
-                                >
-                                  申请关键词变更
-                                </button>
-                              )}
-                          </details>
-                        ))}
-                        {!results.length && (
-                          <p className="empty">当前筛选暂无结果。</p>
-                        )}
-                        {pager(resultPage, setResultPage, results.length)}
-                      </>
-                    ) : (
-                      <>
-                        <h3>解析后的测试项</h3>
-                        <p className="muted">
-                          修订原始字段会保存修改记录；已完成批次保持原样，新建批次使用修订后的数据。
-                        </p>
-                        <div className="table-scroll">
-                          <table>
-                            <thead>
-                              <tr>
-                                <th>领域 / 行号</th>
-                                <th>用例名称</th>
-                                <th>指标 / 值</th>
-                                <th>操作</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {items.map((i) => (
-                                <tr key={i.id}>
-                                  <td>
-                                    {i.domain} / {i.row_number}
-                                  </td>
-                                  <td>{i.current["用例名称"]}</td>
-                                  <td>
-                                    {i.current["指标名称"]} / {i.current["值"]}
-                                  </td>
-                                  <td>
-                                    {selected.owner_id === user.id ? (
-                                      <button
-                                        onClick={() => {
-                                          setEdit(i);
-                                          setEditFields({ ...i.current });
-                                          setReason("");
-                                        }}
-                                      >
-                                        修订字段
-                                      </button>
-                                    ) : (
-                                      "只读"
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        {pager(itemPage, setItemPage, items.length)}
-                      </>
-                    )}
+                      </div>
+                    </>}
+                    <h3>{run ? "审查结果" : "解析后的测试项"}</h3>
+                    {!run && <p className="muted small">点击 AI 审查后，结果会在同一表格中逐项刷新。备注填写后点击“保存备注”。</p>}
+                    {reviewTable()}
+                    {pager(run ? resultPage : itemPage, run ? setResultPage : setItemPage, tableRows.length)}
                   </>
                 )}
               </section>

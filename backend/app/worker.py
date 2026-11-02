@@ -5,7 +5,7 @@ from datetime import timedelta
 from sqlalchemy import select, update, or_, and_, func
 from .config import settings
 from .db import Session, now, uid
-from .models import Run, Result, User
+from .models import Run, Result, User, ResultMeasurements
 from .reviewer import review, rule_version
 from .services import audit
 from .keywords import matching_keywords
@@ -71,6 +71,9 @@ def process_once():
                 return True
             result = db.get(Result, result_id)
             if result.status == "pending":
+                threshold = values.pop("ai_threshold", "")
+                measured = values.pop("ai_value", "")
+                db.add(ResultMeasurements(result_id=result.id, ai_threshold=threshold, ai_value=measured))
                 for key, value in values.items():
                     setattr(result, key, value)
                 locked.completed += 1
