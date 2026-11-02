@@ -29,7 +29,6 @@ def configure_environment(text, target, admin_user):
         "LOCAL_REVIEW_MODULE": values.get("LOCAL_REVIEW_MODULE") or "local_adapters.review_rules",
         "MODEL": values.get("MODEL") or values.get("AI_MODEL") or "",
         "APPLY_TOKEN": values.get("APPLY_TOKEN") or "",
-        "ATTACHMENT_HOSTS": values.get("ATTACHMENT_HOSTS") or "",
     }
     if len(updates["SECRET_KEY"]) < 32:
         raise ValueError("已有 SECRET_KEY 不足 32 字符，请先修正配置")
@@ -103,7 +102,7 @@ def main():
         print("已创建 review 正式业务库，并设置 APP_MODE=production。历史记录为空，源库及旧库未修改。")
         if backup:
             print("旧配置备份：", backup)
-        print("启动前完成本地登录、图片下载和审查函数，并核对 MODEL、APPLY_TOKEN、ATTACHMENT_HOSTS。")
+        print("启动前完成本地登录、图片下载和审查函数，并核对 MODEL、APPLY_TOKEN。")
     except (OSError, ValueError) as exc:
         parser.exit(1, str(exc) + "\n")
 

@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     ai_model: str = ""
     model: str = ""
     apply_token: str = ""
-    attachment_hosts: str = ""
+    attachment_hosts: str = ""  # 兼容旧配置，不再限制附件主机名。
     max_upload_mb: int = 20
     max_items: int = 20000
     token_minutes: int = 60

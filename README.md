@@ -9,7 +9,7 @@ React + TypeScript / FastAPI / SQLAlchemy / PostgreSQL / 独立 Python Worker。
 - .xlsx 多 Sheet 解析，每 Sheet 一个领域；跳过封面、目录和空表，识别“测试详情”后的三行表头、纵向合并单元格、Excel 超链接、常量 HYPERLINK。
 - 仅筛选“测试详情”中“值”非空的行（包括数值 0），附件可为空；上方测试总结及横向合并说明行不计入。兼容旧单行表头模板。公式不猜测缓存值；其他公式需转成值。保留原始文件与 SHA-256。
 - 用户只操作自己的报告；管理员可读全部，不能修改或控制他人报告。
-- 原始解析字段只读，可单独添加用户备注及调整关键词；领域下拉筛选覆盖整份报告。
+- 原始解析字段只读，可单独添加用户备注及调整关键词；领域和审查结果支持勾选多项，清除选择显示全部，后端筛选覆盖整份报告。结果选项包含实际 AI 文案，支持不同错误、无有效图片、缺少关键词、执行失败和待审查。
 - 全量审查、查漏补缺、暂停/继续及重新开始；重新开始按当前选定模式创建新批次并保留旧批次。
 - 关键词变更生效后，四字段匹配的测试项重新待审查；补审只选择待审查项，旧批次结果不覆盖。
 - 无匹配关键词或关键词为空时，AI 结果直接显示“缺少关键词”，不调用审查函数、图片接口或模型，保留待审查状态。
@@ -96,7 +96,7 @@ pnpm run build
 实际内网接入文件放在本机 `backend/local_adapters/`，整个目录通过 `.gitignore` 排除，不上传 GitHub。
 本机目录内的说明列出登录、Cookie 下载和审查函数接口；填写完成后在本机 `.env` 配置
 `APP_MODE=local`、`LOCAL_AUTH_MODULE=local_adapters.login_adapter`、`LOCAL_REVIEW_MODULE=local_adapters.review_rules`
-及 `ATTACHMENT_HOSTS`。正式接入推荐 APP_MODE=production，支持 SQLite review.db 或 PostgreSQL。
+；附件主机名不受限制。正式接入推荐 APP_MODE=production，支持 SQLite review.db 或 PostgreSQL。
 Cookie 失效后仅自动重登并重试一次；仍失败时停止整批审查，页面弹窗提示联系管理员。
 凭据和 Cookie 使用 SECRET_KEY 派生密钥加密，默认 8 小时未更新后过期，退出登录/停用账号会移除。
 不得将 SECRET_KEY 或本地接入目录强制加入 Git。
@@ -113,7 +113,7 @@ cd frontend
 pnpm run build
 ```
 
-测试覆盖越权、管理员只读、修订冲突、快照、审批冲突、即时停用、任务租约恢复、并发领取、导出与链接白名单。
+测试覆盖越权、管理员只读、修订冲突、快照、审批冲突、即时停用、任务租约恢复、并发领取、导出与附件地址格式校验。
 SQLite 可用于正式单 Worker 部署和自动化测试；SQLite/PostgreSQL 并发、真实内网接口及实际 1500 行/30 人负载仍需在目标环境验证。
 
 已有安装升级到表格审查版：Windows 使用 `rebuild-start.cmd` 自动补建新表；手动启动或 Linux 部署前执行

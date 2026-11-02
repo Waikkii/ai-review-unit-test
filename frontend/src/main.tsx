@@ -43,6 +43,7 @@ type Result = {
   row_number: number;
   fields: Record<string, string>;
   status: string;
+  result_label?: string;
   explanation: string;
   evidence: string[];
   suggestion: string;
@@ -192,6 +193,32 @@ function NoteCell({ itemId, note, version, editable }: { itemId: string; note: s
     {error && <span role="alert" className="note-error">{error}</span>}
   </div>;
 }
+function MultiSelect({ label, allLabel, options, value, onChange }: {
+  label: string; allLabel: string; options: string[]; value: string[]; onChange: (value: string[]) => void;
+}) {
+  const choices = Array.from(new Set([...options, ...value]));
+  const summary = value.length ? value.length <= 2 ? value.join("、") : `已选 ${value.length} 项` : allLabel;
+  return <details className="multi-select">
+    <summary aria-label={label} title={value.length ? value.join("、") : allLabel}>{summary}</summary>
+    <div className="multi-select-panel" role="group" aria-label={label + "选项"}>
+      <button type="button" onClick={() => onChange([])}>清除选择（显示全部）</button>
+      {choices.map(option => <label key={option}>
+        <input type="checkbox" checked={value.includes(option)} onChange={event =>
+          onChange(event.target.checked ? [...value, option] : value.filter(item => item !== option))} />
+        <span>{option}</span>
+      </label>)}
+      {!choices.length && <span className="muted small">暂无选项</span>}
+    </div>
+  </details>;
+}
+
+function filterQuery(domains: string[], results: string[] = []) {
+  const params = new URLSearchParams();
+  domains.forEach(domain => params.append("domain", domain));
+  results.forEach(result => params.append("result", result));
+  return params.size ? "&" + params.toString() : "";
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
@@ -209,7 +236,8 @@ function App() {
     [results, setResults] = useState<Result[]>([]);
   const [itemPage, setItemPage] = useState(0),
     [resultPage, setResultPage] = useState(0),
-    [filter, setFilter] = useState("");
+    [filter, setFilter] = useState<string[]>([]);
+  const [resultOptions, setResultOptions] = useState<string[]>([]);
   const [reportPage, setReportPage] = useState(0),
     [runPage, setRunPage] = useState(0),
     [changePage, setChangePage] = useState(0),
@@ -219,7 +247,7 @@ function App() {
     [users, setUsers] = useState<User[]>([]),
     [audit, setAudit] = useState<Audit[]>([]);
   const [domains, setDomains] = useState<string[]>([]),
-    [domainFilter, setDomainFilter] = useState(""),
+    [domainFilter, setDomainFilter] = useState<string[]>([]),
     [reviewMode, setReviewMode] = useState<"full" | "missing">("full"),
     [authAlert, setAuthAlert] = useState("");
   const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
@@ -304,7 +332,7 @@ function App() {
         "/items?limit=" +
         PAGE +
         "&offset=" +
-        itemPage * PAGE + (domainFilter ? "&domain=" + encodeURIComponent(domainFilter) : ""),
+        itemPage * PAGE + filterQuery(domainFilter),
     )
       .then((v) => {
         if (!cancelled) setItems(v);
@@ -349,7 +377,7 @@ function App() {
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const [r, rows] = await Promise.all([
+        const [r, rows, options] = await Promise.all([
           api<Run>("/runs/" + run.id),
           api<Result[]>(
             "/runs/" +
@@ -358,13 +386,14 @@ function App() {
               PAGE +
               "&offset=" +
               resultPage * PAGE +
-              (filter ? "&status=" + filter : "") +
-              (domainFilter ? "&domain=" + encodeURIComponent(domainFilter) : ""),
+              filterQuery(domainFilter, filter),
           ),
+          api<string[]>("/runs/" + run.id + "/result-options"),
         ]);
         if (!cancelled) {
           setRun(r);
           setResults(rows);
+          setResultOptions(options);
         }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -394,18 +423,18 @@ function App() {
     setSelected(r);
     setRun(null);
     setResults([]);
-    setDomainFilter(""); setDomains([]); setAuthAlert("");
+    setDomainFilter([]); setDomains([]); setAuthAlert(""); setResultOptions([]);
     setItemPage(0);
     setRunPage(0);
     setResultPage(0);
-    setFilter("");
+    setFilter([]);
   };
   const chooseRun = (r: Run) => {
     setResults([]);
     setRun(r);
     setReviewMode(r.selection_mode ?? "full");
     setResultPage(0);
-    setFilter("");
+    setFilter([]); setResultOptions([]);
   };
   const controlRun = (operation: "pause" | "resume" | "restart") => act(async () => {
     if (!run) return;
@@ -498,7 +527,7 @@ function App() {
           <td className="ai-cell">{pending ? "" : r?.ai_value ?? ""}</td>
           <td className="ai-cell">{r && status !== "pending" && <button
             className={`verdict-button verdict-${status}`} onClick={() => setVerdictDetail(r)}
-            title="查看审查依据和建议">{status === "needs_review" ? "待确认" : labels[status]}</button>}</td>
+            title="查看审查依据和建议">{r.result_label || (status === "needs_review" ? "待确认" : labels[status])}</button>}</td>
           <td className="ai-cell"><NoteCell itemId={row.itemId} note={row.note ?? ""}
             version={row.noteVersion ?? 0} editable={canEdit} /></td>
           <td><span className={`review-state state-${status}`}>
@@ -799,14 +828,8 @@ function App() {
                       <progress max={run.total || 1} value={run.completed} />
                       <p className="muted small">{run.selection_mode === "missing" ? "查漏补缺" : "全量审查"} · 模型 {run.model || "本地接入"} · {run.mode}</p>
                       <div className="section-head">
-                        <select aria-label="筛选审查状态" value={filter} onChange={e => {
-                          setFilter(e.target.value); setResultPage(0);
-                        }}>
-                          <option value="">全部审查结果</option>
-                          {["passed", "failed", "needs_review", "missing_keyword", "error", "pending"].map(s => (
-                            <option key={s} value={s}>{s === "pending" ? "待审查" : labels[s]}</option>
-                          ))}
-                        </select>
+                        <MultiSelect label="筛选审查结果" allLabel="全部审查结果" options={resultOptions}
+                          value={filter} onChange={value => { setFilter(value); setResultPage(0); }} />
                         <div className="actions">
                           <button onClick={() => { setItemPage(0); setRun(null); }}>查看全部测试项</button>
                           {selected.owner_id === user.id && <>
@@ -823,10 +846,9 @@ function App() {
                       </div>
                     </>}
                     <div className="domain-filter">
-                      <label>领域 <select aria-label="领域筛选" value={domainFilter} title="只筛选展示内容，审查范围为整份报告"
-                        onChange={e => { setDomainFilter(e.target.value); setItemPage(0); setResultPage(0); }}>
-                        <option value="">全部领域</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}
-                      </select></label>
+                      <span>领域</span><MultiSelect label="领域筛选" allLabel="全部领域" options={domains}
+                        value={domainFilter} onChange={value => { setDomainFilter(value); setItemPage(0); setResultPage(0); }} />
+                      <span className="muted small">仅筛选展示，审查范围为整份报告</span>
                     </div>
                     <h3>{run ? "审查结果" : "解析后的测试项"}</h3>
                     {!run && <p className="muted small">原始字段只读。关键词生效后相关项变为待审查，查漏补缺仅处理待审查项。备注填写后点击“保存备注”。</p>}
@@ -1024,7 +1046,7 @@ function App() {
           onClick={e => e.stopPropagation()}>
           <div className="section-head"><h2>AI 审查详情</h2><button onClick={() => setVerdictDetail(null)}>关闭</button></div>
           <p className="muted">{verdictDetail.domain} · {verdictDetail.fields["用例名称"]}</p>
-          <span className={`activity-tag verdict-${verdictDetail.status}`}>{labels[verdictDetail.status]}</span>
+          <span className={`activity-tag verdict-${verdictDetail.status}`}>{verdictDetail.result_label || labels[verdictDetail.status]}</span>
           <dl><dt>识别门限</dt><dd>{verdictDetail.ai_threshold || "—"}</dd>
             <dt>识别值</dt><dd>{verdictDetail.ai_value || "—"}</dd>
             <dt>审查说明</dt><dd>{verdictDetail.explanation}</dd>

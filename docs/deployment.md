@@ -10,7 +10,6 @@ SECRET_KEY=至少32个随机字符
 LOCAL_AUTH_MODULE=local_adapters.login_adapter
 LOCAL_REVIEW_MODULE=local_adapters.review_rules
 BOOTSTRAP_ADMINS=首次管理员的内网账号
-ATTACHMENT_HOSTS=内网图片主机名
 
 AI_MODEL 用于记录审查模型标识；AI_BASE_URL、AI_API_KEY 由本地审查实现按需使用，公共层不直接请求模型。
 

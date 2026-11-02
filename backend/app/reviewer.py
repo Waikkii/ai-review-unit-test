@@ -27,7 +27,6 @@ def review(fields, keywords, username):
         verdict = ReviewVerdict(status="needs_review", explanation="演示模式：尚未接入内网图片、AI 和审查规则，不作通过判定。",
                                 evidence=[], suggestion="接入真实规则后创建新的审查批次。")
         return verdict, {"demo": True, "verdict": verdict.model_dump()}
-    allowed = {host.strip().lower() for host in settings.attachment_hosts.split(",") if host.strip()}
     attachment_url = fields.get("附件链接", "").strip()
     auth_failure = None
 
@@ -39,8 +38,8 @@ def review(fields, keywords, username):
         if not isinstance(url, str) or any(c.isspace() for c in url):
             raise ValueError("fetchimage 需要单个 URL 字符串")
         parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname not in allowed or parsed.username or parsed.password:
-            raise ValueError("附件地址未列入允许列表")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("附件地址必须为不含账号密码的有效 HTTP/HTTPS URL")
         try:
             images = download_with_session(url, username)
         except SessionAuthFailure as exc:

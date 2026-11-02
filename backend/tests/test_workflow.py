@@ -187,18 +187,18 @@ def test_result_and_request_access_are_scoped(client, headers):
     assert client.get('/api/keyword-requests',headers=user).json() == []
     assert not any(a["action"]=="keyword.create" for a in client.get('/api/audit?summary=false',headers=user).json())
 
-def test_live_reviewer_rejects_unapproved_attachment_host(client, monkeypatch):
+def test_live_reviewer_rejects_invalid_attachment_url(client, monkeypatch):
     from app.reviewer import review
     from test_auth_sessions import adapter
     from test_local_review import configure_rule
     adapter(monkeypatch)
     def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
         fetchimage(attachment_url)
-        raise AssertionError("unapproved attachment must not be downloaded")
+        raise AssertionError("invalid attachment must not be downloaded")
     configure_rule(monkeypatch, rule)
     import pytest
-    with pytest.raises(ValueError,match="允许列表"):
-        review({"附件链接":"http://evil.example/x.jpg"},[{"payload":{"e":"功率"}}],"demo")
+    with pytest.raises(ValueError,match="HTTP/HTTPS"):
+        review({"附件链接":"file:///x.jpg"},[{"payload":{"e":"功率"}}],"demo")
 
 def test_worker_rejects_mismatched_rule_version(client, headers, monkeypatch):
     import app.worker as worker

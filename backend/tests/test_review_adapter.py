@@ -76,3 +76,40 @@ def test_http_auth_status_triggers_one_refresh_without_custom_error(client, monk
 
 def test_cookie_expired_is_a_signal_exception_not_a_network_stub():
     assert str(CookieExpired()) == "登录状态已失效"
+
+
+@pytest.mark.parametrize("url", ["https://another.intranet.local/images", "http://10.20.30.40:8080/file",
+                                 "http://localhost/image", "https://[::1]/image"])
+@pytest.mark.parametrize("old_hosts", ["", "unrelated.example"])
+def test_attachment_hosts_are_unrestricted_even_with_old_whitelist_config(client, monkeypatch, url, old_hosts):
+    calls = []
+    image = (b"\xff\xd8\xfftest", "image/jpeg")
+
+    def download(address, username):
+        calls.append((address, username))
+        return [image]
+
+    def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
+        assert fetchimage(attachment_url) == [image]
+        return "10", "12", "通过"
+
+    configure_rule(monkeypatch, rule)
+    monkeypatch.setattr(settings, "attachment_hosts", old_hosts)
+    monkeypatch.setattr("app.reviewer.download_with_session", download)
+    verdict, _ = review({"附件链接": url}, [{"payload": {"e": "功率"}}], "current-user")
+    assert verdict.status == "passed" and calls == [(url, "current-user")]
+
+
+@pytest.mark.parametrize("url", ["file:///tmp/a.jpg", "ftp://files.intranet/a.jpg", "http:///a.jpg",
+                                 "https://name:password@host/image", "https://host/a b.jpg"])
+def test_invalid_attachment_urls_are_still_rejected_before_download(client, monkeypatch, url):
+    def download(*args):
+        raise AssertionError("invalid URL must not be downloaded")
+
+    def rule(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
+        fetchimage(attachment_url)
+
+    configure_rule(monkeypatch, rule)
+    monkeypatch.setattr("app.reviewer.download_with_session", download)
+    with pytest.raises(ValueError):
+        review({"附件链接": url}, [{"payload": {"e": "功率"}}], "current-user")

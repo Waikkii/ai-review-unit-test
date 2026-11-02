@@ -18,6 +18,7 @@ from .services import audit, visible_report, visible_run, keyword_dict, apply_ch
 from .audit_view import SUMMARY_ACTIONS, describe_activity
 from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, run_json as workflow_run_json
 from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE
+from .result_filters import effective_result_expressions
 
 @asynccontextmanager
 async def lifespan(app):
@@ -164,7 +165,7 @@ def clear_report(report_id: str, user=Depends(current_user), db=Depends(get_db))
 
 @app.get("/api/reports/{report_id}/items")
 def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
-          domain: str | None = None,
+          domain: list[str] | None = Query(None),
           user=Depends(current_user), db=Depends(get_db)):
     visible_report(db, report_id, user)
     query = select(Item, ItemNote, ItemReviewState, Result, ResultMeasurements, ResultWork).outerjoin(ItemNote, ItemNote.item_id == Item.id)
@@ -173,7 +174,7 @@ def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, 
     query = query.outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id).where(Item.report_id == report_id)
     query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id)
     if domain:
-        query = query.where(Item.domain == domain)
+        query = query.where(Item.domain.in_(domain))
     rows = db.execute(query.order_by(Item.domain, Item.row_number).offset(offset).limit(limit))
     return [{**serial(i, "id report_id domain row_number original current version"),
              "note": note.note if note else "", "note_version": note.version if note else 0,
@@ -297,22 +298,30 @@ def run_detail(run_id: str, user=Depends(current_user), db=Depends(get_db)):
 
 @app.get("/api/runs/{run_id}/results")
 def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
-            status: str | None = None, domain: str | None = None, user=Depends(current_user), db=Depends(get_db)):
+            status: list[str] | None = Query(None), domain: list[str] | None = Query(None),
+            result: list[str] | None = Query(None), user=Depends(current_user), db=Depends(get_db)):
     visible_run(db, run_id, user)
     q = select(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     q = q.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
-    pending = or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
-    stale = ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)
+    _, result_label = effective_result_expressions()
     if status:
-        if status == "pending":
-            q = q.where(or_(Result.status == "pending", and_(pending, or_(Result.status != "error", stale))))
-        elif status in {"error", "missing_keyword"}:
-            q = q.where(Result.status == status, ~stale)
-        else:
-            q = q.where(Result.status == status, ~pending)
+        # 兼容既有状态筛选：缺少关键词也属于可补审的 pending 工作。
+        pending = or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
+        stale = ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)
+        conditions = []
+        for selected_status in status:
+            if selected_status == "pending":
+                conditions.append(or_(Result.status == "pending", and_(pending, or_(Result.status != "error", stale))))
+            elif selected_status in {"error", "missing_keyword"}:
+                conditions.append(and_(Result.status == selected_status, ~stale))
+            else:
+                conditions.append(and_(Result.status == selected_status, ~pending))
+        q = q.where(or_(*conditions))
+    if result:
+        q = q.where(result_label.in_(result))
     if domain:
-        q = q.where(Result.domain == domain)
-    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork)
+        q = q.where(Result.domain.in_(domain))
+    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork, result_label)
         .outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id)
         .outerjoin(ItemNote, ItemNote.item_id == Result.item_id)
         .order_by(Result.domain, Result.row_number).offset(offset).limit(limit))
@@ -321,8 +330,18 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
              "ai_value": measured.ai_value if measured else "",
              "note": note.note if note else "", "note_version": note.version if note else 0,
              "pending_review": is_pending(state),
+             "result_label": label,
              "stale": bool(state and state.revision > (work.item_revision if work else 1))}
-            for r, measured, note, state, work in rows]
+            for r, measured, note, state, work, label in rows]
+
+
+@app.get("/api/runs/{run_id}/result-options")
+def result_options(run_id: str, user=Depends(current_user), db=Depends(get_db)):
+    visible_run(db, run_id, user)
+    _, label = effective_result_expressions()
+    query = select(label).select_from(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
+    query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
+    return list(db.scalars(query.distinct().order_by(label)))
 
 @app.get("/api/runs/{run_id}/export")
 def export(run_id: str, user=Depends(current_user), db=Depends(get_db)):

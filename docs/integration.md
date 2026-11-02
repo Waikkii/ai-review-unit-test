@@ -6,7 +6,7 @@
 - LOCAL_REVIEW_MODULE=local_adapters.review_rules：review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage) 返回 (ai_threshold, ai_value, result) 三个字符串，并提供 RULE_VERSION。兼容旧版 (verdict, raw) 返回格式。
 - attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[bytes, str]]]。
 - 系统先按测试对象、用例编号、用例名称、测试小项匹配 a～d，将 e 列的单个关键词传入。无关键词直接返回“缺少关键词”。
-- ATTACHMENT_HOSTS 为附件入口主机名白名单，逗号分隔。图片支持 JPEG/PNG，每次最多 10 张，每张最多 10 MiB。
+- 附件主机名和 IP 不受白名单限制，无需配置 ATTACHMENT_HOSTS；旧配置保留也不影响访问。地址仍需为不含账号密码的有效 HTTP/HTTPS URL。图片支持 JPEG/PNG，每次最多 10 张，每张最多 10 MiB。
 - verdict 包含 status（passed/failed/needs_review）、explanation、evidence、suggestion、ai_threshold、ai_value；raw 为可 JSON 序列化的 dict。
 - 规则变化时更新 RULE_VERSION，统一重启 API/Worker；整项执行时间应小于 LEASE_SECONDS（默认 300 秒）。
 - AI 请求由本地 review_item 实现；本机 `.env` 可配置 `MODEL` 和 `APPLY_TOKEN`，在函数中通过 `from app.config import settings` 读取 `settings.model`、`settings.apply_token`。令牌由本地函数按实际接口要求使用，框架不会自动添加请求头。`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 继续兼容，审查记录优先使用 `MODEL`，为空时使用 `AI_MODEL`。修改配置后需重启 API 和 Worker。
@@ -73,7 +73,9 @@ restart 接受 {selection_mode:"full|missing"}，按界面当前选定模式创�
 批次冻结关键词与项修订号；审查过程中生效的新关键词不会被旧结果误标成已完成，需下一次补审处理。
 原始批次结果保留，pending_review 表示当前关键词下仍需审查。
 领域筛选只影响展示，在服务端过滤后分页，不改变全量/补审选择范围。
-GET /api/reports/{id}/domains 返回整份报告的领域；items 和 run results 接受 domain 参数。
+GET /api/reports/{id}/domains 返回整份报告的领域；items 和 run results 接受重复 domain 参数，例如 `?domain=领域一&domain=领域二`。领域之间取并集，后端筛选后分页。
+
+审查结果支持重复 result 参数按网页实际结果文案精确筛选，例如 `?result=缺少关键词&result=执行失败`。结果之间取并集，与领域筛选取交集；没有选择时显示全部。`GET /api/runs/{id}/result-options` 返回整批数据中去重的有效结果文案，不受当前分页和领域选择限制。重新待审查的旧结论归入“待审查”，未失效的缺少关键词仍单独显示。旧 status 参数继续兼容，也支持重复 status 参数。
 
 ## 操作记录摘要
 
