@@ -10,24 +10,39 @@ def attachment_urls(value):
     return re.findall(r"https?://[^\s<>\"，,;；]+", value, flags=re.I)
 
 def detail_header(sheet):
-    """识别测试详情双层表头，兼容单行模板，排除上方测试总结。"""
+    """实际报告使用三行表头；无详情标题的单行演示模板单独识别。"""
     sections = [cell.row for row in sheet.iter_rows() for cell in row
                 if cell.value == "测试详情"]
     if len(sections) > 1:
         raise ValueError(f"{sheet.title}: 存在多个测试详情区域，暂不支持")
     start = sections[0] + 1 if sections else 1
     end = min(sheet.max_row, start + 29)
-    for bottom in range(start, end + 1):
-        for top in range(bottom, max(start, bottom - 1) - 1, -1):
+    for top in range(start, end + 1):
+        layouts = [(top, top + 2)] if sections else [(top, top)]
+        for first, bottom in layouts:
+            if bottom > end:
+                continue
             positions = {name: set() for name in ["测试对象", *COLUMNS]}
-            for row in sheet.iter_rows(min_row=top, max_row=bottom):
+            for row in sheet.iter_rows(min_row=first, max_row=bottom):
                 for cell in row:
                     name = str(cell.value).strip() if cell.value is not None else ""
                     if name in positions:
                         positions[name].add(cell.column)
             if all(len(positions[name]) == 1 for name in COLUMNS) and len(positions["测试对象"]) <= 1:
-                return bottom, {name: next(iter(cols)) for name, cols in positions.items() if cols}
-    raise ValueError(f"{sheet.title}: 未找到测试详情完整、唯一的 11 个字段（支持两行表头）")
+                columns = {name: next(iter(cols)) for name, cols in positions.items() if cols}
+                if sections:
+                    parents = ["测试对象", *COLUMNS[:7]]
+                    if "测试对象" not in columns:
+                        continue
+                    if not all(sheet.cell(first, columns[name]).value == name and any(
+                        area.min_row == first and area.max_row == bottom
+                        and area.min_col == columns[name] == area.max_col
+                        for area in sheet.merged_cells.ranges) for name in parents):
+                        continue
+                    if not all(sheet.cell(bottom, columns[name]).value == name for name in COLUMNS[7:]):
+                        continue
+                return bottom, columns
+    raise ValueError(f"{sheet.title}: 未找到完整、唯一的测试详情三行表头，请检查合并单元格和字段名")
 
 
 def parse_excel(content):
