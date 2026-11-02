@@ -77,11 +77,9 @@ def review(fields, keywords, username):
         if not all(isinstance(part, str) for part in output):
             raise ValueError("本地审查的门限、值、结果必须为三个字符串")
         raw = {"ai_threshold": threshold, "ai_value": value, "result": result}
-        statuses = {"passed": "passed", "failed": "failed", "needs_review": "needs_review",
-                    "通过": "passed", "不通过": "failed", "待人工确认": "needs_review"}
-        if result not in statuses:
-            raise InvalidVerdict(raw)
-        verdict = {"status": statuses[result], "explanation": result,
+        text = result.strip()
+        status = "passed" if text == "通过" else "failed" if "判断错误" in text else "needs_review"
+        verdict = {"status": status, "explanation": result if text else "待人工确认",
                    "ai_threshold": threshold, "ai_value": value}
     elif isinstance(output, (tuple, list)) and len(output) == 2:
         # 兼容原有 (verdict, raw) 返回格式。

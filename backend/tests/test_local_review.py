@@ -84,8 +84,13 @@ def test_local_rule_raw_output_must_be_json_serializable(client, monkeypatch):
         review({"单位": "", "附件链接": ""}, [{"payload": {"e": "功率"}}], "demo")
 
 
-@pytest.mark.parametrize("result,status", [("通过", "passed"), ("不通过", "failed"),
-    ("待人工确认", "needs_review"), ("passed", "passed"), ("failed", "failed"), ("needs_review", "needs_review")])
+@pytest.mark.parametrize("result,status", [("通过", "passed"), (" 通过\n", "passed"),
+    ("功率判断错误。", "failed"), ("判断错误，请人工排查", "failed"),
+    ("通过，但电压判断错误", "failed"),
+    ("无有效图片。", "needs_review"), ("功率错误，请人工排查。", "needs_review"),
+    ("待人工确认", "needs_review"), ("不通过", "needs_review"), ("通过。", "needs_review"),
+    ("passed", "needs_review"), ("failed", "needs_review"), ("unknown", "needs_review"),
+    ("", "needs_review"), ("  ", "needs_review")])
 def test_extended_inputs_and_three_string_outputs(client, monkeypatch, result, status):
     fields = {"单位": "dB", "附件链接": "", "判据门限": "大于等于", "门限": "0", "值": "0.00"}
     original = fields.copy()
@@ -101,10 +106,11 @@ def test_extended_inputs_and_three_string_outputs(client, monkeypatch, result, s
     assert verdict.status == status
     assert (verdict.ai_threshold, verdict.ai_value) == ("-10", "0.01")
     assert raw == {"ai_threshold": "-10", "ai_value": "0.01", "result": result}
+    assert verdict.explanation == (result if result.strip() else "待人工确认")
     assert fields == original
 
 
-@pytest.mark.parametrize("output", [("", "", ""), ("10", "12", "unknown"), (10, "12", "通过"),
+@pytest.mark.parametrize("output", [(10, "12", "通过"),
                                    ("10", None, "通过"), ("10", "12", "通过", {})])
 def test_invalid_three_value_output_is_rejected(client, monkeypatch, output):
     configure_rule(monkeypatch, lambda *args: output)
@@ -131,12 +137,13 @@ def test_worker_persists_three_value_response_and_preserves_original_fields(clie
     report = upload(client, owner)
     request = {**change(domain="射频"), "payload": {"e": "功率"}}
     assert client.post('/api/keyword-requests', headers=admin, json=request).status_code == 201
-    configure_rule(monkeypatch, lambda *args: ("AI门限", "AI值", "不通过"))
+    configure_rule(monkeypatch, lambda *args: ("AI门限", "AI值", "功率判断错误。"))
     run = client.post(f'/api/reports/{report["id"]}/runs', headers=owner).json()
     assert process_once()
     rows = client.get(f'/api/runs/{run["id"]}/results', headers=owner).json()
     reviewed = [row for row in rows if row["domain"] == "射频"]
     assert len(reviewed) == 2
     assert all((row["ai_threshold"], row["ai_value"], row["status"]) == ("AI门限", "AI值", "failed") for row in reviewed)
+    assert all(row["result_label"] == "功率判断错误。" for row in reviewed)
     assert {row["fields"]["值"] for row in reviewed} == {"12", "8"}
     assert all(row["fields"]["门限"] == "10" for row in reviewed)

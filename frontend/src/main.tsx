@@ -100,7 +100,7 @@ const labels: Record<string, string> = {
   completed: "已完成",
   partial_failed: "部分执行失败",
   passed: "通过",
-  failed: "不通过",
+  failed: "未通过",
   needs_review: "待人工确认",
   missing_keyword: "缺少关键词",
   error: "执行失败",

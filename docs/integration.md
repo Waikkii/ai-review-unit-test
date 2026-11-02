@@ -85,4 +85,6 @@ GET /api/audit 默认只返回 report.upload、run.start、report.download、run
 
 ### 扩展审查参数与三值返回
 
-criterion、threshold、value 分别取 Excel 当前测试项的“判据门限”“门限”“值”，均保持字符串，空字段为 ""，零值为 "0"。返回示例：`return "10", "8.5", "通过"`。结果支持“通过”“不通过”“待人工确认”或 passed/failed/needs_review；未知或空结果按接口格式错误处理，不自动判为通过。AI 门限和值写入审查结果列，原始 Excel 字段保持不变。fetchimage 仍是绑定当前用户的多图下载回调，类型不变。
+criterion、threshold、value 分别取 Excel 当前测试项的“判据门限”“门限”“值”，均保持字符串，空字段为 ""，零值为 "0"。返回示例：`return "10", "8.5", "通过"`。结果文案去除首尾空白后，恰好等于“通过”则为通过（passed）；包含“判断错误”则为未通过（failed）；其余文案均为待人工确认（needs_review），包括无有效图片、其他错误说明和空结果。原文保留在 raw.result，非空原文同时保存在 explanation，供展示和筛选。AI 门限和值写入审查结果列，原始 Excel 字段保持不变。fetchimage 仍是绑定当前用户的多图下载回调，类型不变。
+
+系统自身的缺少关键词、执行异常、尚未执行仍分别使用 missing_keyword、error、pending，保持原有流程；上述文案映射用于本地 review_item 返回的三值结果。旧版 (verdict, raw) 返回接口仍按其明确的内部 status 校验。

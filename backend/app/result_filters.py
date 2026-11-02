@@ -12,7 +12,7 @@ def effective_result_expressions():
     label = case(
         (status == "pending", "待审查"), (status == "passed", "通过"),
         (status == "error", "执行失败"), (status == "missing_keyword", "缺少关键词"),
-        (status == "failed", case((detail == "failed", "不通过"), else_=func.coalesce(detail, "不通过"))),
+        (status == "failed", case((detail == "failed", "未通过"), else_=func.coalesce(detail, "未通过"))),
         (status == "needs_review", case((detail == "needs_review", "待人工确认"),
                                        else_=func.coalesce(detail, "待人工确认"))),
         else_=func.coalesce(detail, status),
