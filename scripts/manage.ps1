@@ -132,6 +132,8 @@ try {
     } else {
         if (-not (Test-Path -LiteralPath $pythonExe)) { throw 'Missing .venv. Follow the first-time setup in README.md.' }
         if (-not (Test-Path -LiteralPath (Join-Path $projectRoot '.env'))) { throw 'Missing .env. Follow the first-time setup in README.md.' }
+        & $pythonExe -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('cryptography') else 1)"
+        if ($LASTEXITCODE -ne 0) { throw 'Missing backend dependency. Run: .venv\Scripts\python -m pip install -r backend/requirements.lock.txt' }
         if ($Action -eq 'rebuild') {
             Stop-ServiceProcess 'worker'
             Stop-ServiceProcess 'api'

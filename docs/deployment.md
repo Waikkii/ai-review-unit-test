@@ -18,6 +18,9 @@ ATTACHMENT_HOSTS=内网图片主机名
 第一版通过 create_all 初始化 v1；未来结构变更需配套迁移，create_all 不用于升级旧表。
 表格审查版提供增量升级：停止 API/Worker 后，用项目虚拟环境执行 `python scripts/run.py migrate`，
 补建 item_notes 和 result_measurements 两张表，保留现有数据；可重复执行。Windows 一键脚本自动执行此步骤。
+模式控制版还会补建 run_controls、item_review_states、result_work、session_credentials，
+把活动任务约束扩展为包括暂停，并从已有成功执行结果回填待审查状态。升级前停止 API/Worker。
+升级依赖时先安装最新 backend/requirements.lock.txt，其中包含凭据加密所需 cryptography。
 
 生产环境同目录共享 .env、data、数据库配置。原始 Excel 文件留在服务端磁盘，不随意清理。
 Windows 通过 NTFS ACL 仅向服务账号开放 .env、data；Linux .env 权限 600，data 目录 700。
@@ -68,4 +71,4 @@ Linux 替换 Python 路径。目标机运行已构建 frontend/dist 不需要 No
 
 实际 Excel 模板的标题/合并/链接规则、原有 SQLite 库导入、内网认证与凭据生命周期、视觉模型返回均需在提供接口后联调。
 本地测试未代替 PostgreSQL 多进程故障恢复及 30 用户/1500 项负载验收。
-当前无结论人工覆盖入口、无取消任务、无图片归档；并非所有候选功能均已开放。
+当前无结论人工覆盖入口和图片归档；支持暂停、继续、按当前选定模式重新开始（旧批次保留）。

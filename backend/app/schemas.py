@@ -31,6 +31,10 @@ class NoteEdit(StrictModel):
     version: int = Field(ge=0)
 
 
+class StartReview(StrictModel):
+    selection_mode: Literal["full", "missing"] = "full"
+
+
 class KeywordChange(StrictModel):
     action: Literal["create", "update", "delete"]
     domain: str = Field(min_length=1, max_length=128)
@@ -81,7 +85,7 @@ class UserChange(StrictModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 class ReviewVerdict(StrictModel):
-    status: Literal["passed", "failed", "needs_review"]
+    status: Literal["passed", "failed", "needs_review", "missing_keyword"]
     explanation: str = Field(min_length=1, max_length=16000)
     evidence: list[str] = Field(default_factory=list, max_length=100)
     suggestion: str = Field(default="", max_length=16000)

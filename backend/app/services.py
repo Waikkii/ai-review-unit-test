@@ -47,3 +47,5 @@ def apply_change(db, change, actor):
         db.refresh(existing)
         keyword = existing
     audit(db, actor, "keyword." + change.action, keyword.id, before, keyword_dict(keyword), change.reason)
+    from .review_workflow import invalidate_keyword_items
+    invalidate_keyword_items(db, keyword)

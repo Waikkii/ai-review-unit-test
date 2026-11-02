@@ -193,6 +193,10 @@ small {
 .history-panel > summary span { margin-left: 8px; color: #8b99a7; }
 .history-panel .run-list { margin-top: 12px; }
 .history-panel .pager { margin-top: 12px; }
+.review-mode { width: 130px; padding: 7px 10px; font-size: 12px; }
+.domain-filter { display: flex; align-items: center; margin: 14px 0; }
+.domain-filter label { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.domain-filter select { width: 180px; padding: 7px 10px; }
 .report-list h2 {
   padding-left: 8px;
 }
@@ -463,6 +467,7 @@ dd {
 .verdict-passed { color: #27724b; }
 .verdict-failed, .verdict-error { color: #a14638; }
 .verdict-needs_review { color: #8e6f21; }
+.verdict-missing_keyword { color: #a77b30; }
 .review-state {
   display: inline-block;
   white-space: normal;
@@ -473,6 +478,7 @@ dd {
   font-size: 11px;
 }
 .state-pending { background: #f0f3f7; color: #758496; }
+.state-missing_keyword { background: #fff5e6; color: #a77b30; }
 .state-error { background: #fde9e5; color: #a14638; }
 table {
   width: 100%;

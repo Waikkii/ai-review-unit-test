@@ -1,5 +1,5 @@
 """替换成自己的模块，并通过 INTEGRATION_MODULE=your_package.adapters 引入。
-不要在此模块、数据库、日志中保存用户密码；下载凭据生命周期由内网集成管理。
+不要把密码写入源码或日志；新内网接入由 auth_sessions 加密临时保存后台重登凭据。
 """
 RULE_VERSION = "unconfigured-v1"
 

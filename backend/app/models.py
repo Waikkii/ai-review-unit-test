@@ -48,8 +48,8 @@ class Run(Base):
     lease_until: Mapped[object | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime, default=now)
     __table_args__ = (Index("one_active_run_per_report", "report_id", unique=True,
-        sqlite_where=text("state IN ('queued', 'running')"),
-        postgresql_where=text("state IN ('queued', 'running')")),)
+        sqlite_where=text("state IN ('queued', 'running', 'pausing', 'paused')"),
+        postgresql_where=text("state IN ('queued', 'running', 'pausing', 'paused')")),)
 
 class Result(Base):
     __tablename__ = "results"
@@ -78,6 +78,36 @@ class ItemNote(Base):
     item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)
     note: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class RunControl(Base):
+    __tablename__ = "run_controls"
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    selection_mode: Mapped[str] = mapped_column(String(16), default="full")
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+
+
+class ItemReviewState(Base):
+    __tablename__ = "item_review_states"
+    item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    reviewed_revision: Mapped[int] = mapped_column(Integer, default=0)
+    source_result_id: Mapped[str | None] = mapped_column(ForeignKey("results.id"), nullable=True)
+
+
+class ResultWork(Base):
+    __tablename__ = "result_work"
+    result_id: Mapped[str] = mapped_column(ForeignKey("results.id"), primary_key=True)
+    item_revision: Mapped[int] = mapped_column(Integer)
+
+
+class SessionCredential(Base):
+    __tablename__ = "session_credentials"
+    username: Mapped[str] = mapped_column(String(128), primary_key=True)
+    encrypted: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[object] = mapped_column(DateTime, default=now)
 
 
 class Keyword(Base):

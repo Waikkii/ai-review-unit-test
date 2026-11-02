@@ -5,12 +5,15 @@ React + TypeScript / FastAPI / SQLAlchemy / PostgreSQL / 独立 Python Worker。
 
 ## 已实现
 
-- 内网鉴权适配接口、短期 Bearer Token、用户启用状态及角色实时检查；不存用户密码。
+- 内网鉴权适配接口、短期 Bearer Token、用户启用状态及角色实时检查；内网接入凭据和 Cookie 临时加密保存，供后台自动重登。
 - .xlsx 多 Sheet 解析，每 Sheet 一个领域；跳过封面、目录和空表，识别“测试详情”后的三行表头、纵向合并单元格、Excel 超链接、常量 HYPERLINK。
 - 仅筛选“测试详情”中“值”非空的行（包括数值 0），附件可为空；上方测试总结及横向合并说明行不计入。兼容旧单行表头模板。公式不猜测缓存值；其他公式需转成值。保留原始文件与 SHA-256。
-- 用户只读写自己的报告；管理员可读全部、仅能修订/发起自己的报告。
-- 原始字段修订与版本冲突保护；审查结论人工修改第一版不开放。
-- 持久化任务、实时进度、单报告一个活动任务、Worker 租约及中断恢复、逐项失败记录。
+- 用户只操作自己的报告；管理员可读全部，不能修改或控制他人报告。
+- 原始解析字段只读，可单独添加用户备注及调整关键词；领域下拉筛选覆盖整份报告。
+- 全量审查、查漏补缺、暂停/继续及重新开始；重新开始按当前选定模式创建新批次并保留旧批次。
+- 关键词变更生效后，四字段匹配的测试项重新待审查；补审只选择待审查项，旧批次结果不覆盖。
+- 无匹配关键词或关键词为空时，AI 结果直接显示“缺少关键词”，不调用审查函数、图片接口或模型，保留待审查状态。
+- 持久化任务、实时进度、单报告一个活动任务（含暂停）、Worker 租约恢复及旧 Worker 写入隔离。
 - 每批次固定字段/关键词快照、模型、规则版本、运行模式及 AI 原始返回；历史不覆盖。
 - 解析和审查使用相同表格，显示全部原始字段与 AI 门限/值/结果、用户备注，逐项刷新状态；保留结果筛选及各列表分页。
 - 表格按页面宽度分配全部列，原始字段自动换行；附件显示超链接，AI 依据点击结果查看。
@@ -48,7 +51,7 @@ scripts/setup.py 生成未纳入 Git 的 .env，演示账号 demo、admin，随�
 已有手动启动的 API/Worker 请先关闭，再使用一键脚本。
 初次构建需要 Node.js、pnpm 和可用的依赖源/缓存；构建完成且源码未变化时，日常启动不需要构建工具或联网。
 如果更新修改了后端依赖，先运行 `.venv\Scripts\python -m pip install -r backend/requirements.lock.txt`。
-脚本不会重新生成 `.env` 或清空数据库；启动前自动补建用户备注和 AI 测量值所需的新表。
+脚本不会重新生成 `.env` 或清空数据库；启动前自动升级辅助表、暂停约束及待审查状态。
 可用 PowerShell 查看状态：`powershell -NoProfile -File scripts/manage.ps1 -Action status`。
 默认仅本机访问；需要内网访问时使用 `start.cmd -BindAddress 你的内网IP`，重建时同样传给 `rebuild-start.cmd`。
 成功启动后会在本地保存该地址，后续双击启动或重新构建会沿用；可再次传入 `-BindAddress` 更换地址。
@@ -75,6 +78,14 @@ pnpm run build
 **演示模式不会下载图片或调用模型，也不会产生真实“通过”判定。**
 
 ## 接入内网
+
+实际内网接入文件放在本机 `backend/local_adapters/`，整个目录通过 `.gitignore` 排除，不上传 GitHub。
+本机目录内的说明列出登录、Cookie 下载和审查函数接口；填写完成后在本机 `.env` 配置
+`APP_MODE=local`、`LOCAL_AUTH_MODULE=local_adapters.login_adapter`、`LOCAL_REVIEW_MODULE=local_adapters.review_rules`
+及 `ATTACHMENT_HOSTS`。local 模式可用 SQLite，production 仍要求 PostgreSQL。
+Cookie 失效后仅自动重登并重试一次；仍失败时停止整批审查，页面弹窗提示联系管理员。
+凭据和 Cookie 使用 SECRET_KEY 派生密钥加密，默认 8 小时未更新后过期，退出登录/停用账号会移除。
+不得将 SECRET_KEY 或本地接入目录强制加入 Git。
 
 参考 [接入说明](docs/integration.md) 和 [部署说明](docs/deployment.md)。
 正式接入需要脱敏 Excel 样例、关键词库结构、内网认证接口、现有凭证下载代码、审查规则及支持图片的 AI 模型。

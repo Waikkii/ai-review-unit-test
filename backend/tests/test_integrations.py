@@ -60,4 +60,4 @@ def test_adapter_rejects_fake_image(monkeypatch):
     monkeypatch.setattr(settings,"integration_module","test_corp")
     monkeypatch.setattr(settings,"attachment_hosts","intranet.example")
     with pytest.raises(ValueError,match="JPEG"):
-        review({"附件链接":"https://intranet.example/a.jpg"},[],"demo")
+        review({"附件链接":"https://intranet.example/a.jpg"},[{"payload":{"e":"功率"}}],"demo")

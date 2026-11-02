@@ -107,7 +107,7 @@ def test_detail_upload_edit_review_and_export(client, headers):
     items = client.get(f'/api/reports/{report["id"]}/items', headers=h).json()
     item = next(i for i in items if i["row_number"] == first)
     edit = {"version": 1, "fields": item["current"], "reason": "修订文字项"}
-    assert client.patch(f'/api/items/{item["id"]}', headers=h, json=edit).status_code == 200
+    assert client.patch(f'/api/items/{item["id"]}', headers=h, json=edit).status_code == 409
     edit["fields"] = {**edit["fields"], "值": " "}
     edit["version"] = 2
     assert client.patch(f'/api/items/{item["id"]}', headers=h, json=edit).status_code == 422
@@ -115,7 +115,7 @@ def test_detail_upload_edit_review_and_export(client, headers):
     assert process_once()
     results = client.get(f'/api/runs/{run["id"]}/results', headers=h).json()
     assert len(results) == 3
-    assert all(r["status"] == "needs_review" for r in results)
+    assert all(r["status"] == "missing_keyword" for r in results)
     from openpyxl import load_workbook
     exported = client.get(f'/api/runs/{run["id"]}/export', headers=h)
     with BytesIO(exported.content) as stream:

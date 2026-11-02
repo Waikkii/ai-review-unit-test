@@ -21,6 +21,9 @@ type Run = {
   mode: string;
   model: string;
   revision: number;
+  selection_mode: "full" | "missing";
+  error_code: string;
+  error_message: string;
 };
 type Item = {
   id: string;
@@ -30,6 +33,8 @@ type Item = {
   version: number;
   note: string;
   note_version: number;
+  pending_review: boolean;
+  review: Result | null;
 };
 type Result = {
   id: string;
@@ -45,6 +50,8 @@ type Result = {
   ai_value: string;
   note: string;
   note_version: number;
+  pending_review?: boolean;
+  stale?: boolean;
 };
 type ReviewRow = {
   itemId: string;
@@ -94,6 +101,7 @@ const labels: Record<string, string> = {
   passed: "通过",
   failed: "不通过",
   needs_review: "待人工确认",
+  missing_keyword: "缺少关键词",
   error: "执行失败",
   pending: "待处理",
   approved: "已批准",
@@ -101,6 +109,10 @@ const labels: Record<string, string> = {
   create: "新增",
   update: "修改",
   delete: "删除",
+  paused: "已暂停",
+  pausing: "正在暂停",
+  blocked: "审查已停止",
+  cancelled: "已重新开始",
 };
 let token = ""; // 仅保存在当前页面内存，关闭/刷新后重新登录。
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -206,9 +218,10 @@ function App() {
     [changes, setChanges] = useState<Change[]>([]),
     [users, setUsers] = useState<User[]>([]),
     [audit, setAudit] = useState<Audit[]>([]);
-  const [edit, setEdit] = useState<Item | null>(null),
-    [editFields, setEditFields] = useState<Record<string, string>>({}),
-    [reason, setReason] = useState("");
+  const [domains, setDomains] = useState<string[]>([]),
+    [domainFilter, setDomainFilter] = useState(""),
+    [reviewMode, setReviewMode] = useState<"full" | "missing">("full"),
+    [authAlert, setAuthAlert] = useState("");
   const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
   const [action, setAction] = useState("create"),
     [entry, setEntry] = useState<Record<string, string>>(emptyEntry),
@@ -241,6 +254,7 @@ function App() {
       setSelected(null);
       setRun(null);
       setReports([]);
+      setAuthAlert("");
     };
     window.addEventListener("session-expired", expire);
     return () => window.removeEventListener("session-expired", expire);
@@ -281,7 +295,7 @@ function App() {
     load().catch((e) => setError(e.message));
   }, [user, tab, changePage, auditPage]);
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || tab !== "reports") return;
     let cancelled = false;
     setItems([]);
     api<Item[]>(
@@ -290,7 +304,7 @@ function App() {
         "/items?limit=" +
         PAGE +
         "&offset=" +
-        itemPage * PAGE,
+        itemPage * PAGE + (domainFilter ? "&domain=" + encodeURIComponent(domainFilter) : ""),
     )
       .then((v) => {
         if (!cancelled) setItems(v);
@@ -299,7 +313,17 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, itemPage]);
+  }, [selected, itemPage, domainFilter, tab, run?.state]);
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    api<string[]>(`/reports/${selected.id}/domains`).then(v => { if (!cancelled) setDomains(v); })
+      .catch(e => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
+  }, [selected?.id]);
+  useEffect(() => {
+    if (run?.error_code === "auth_session_failed") setAuthAlert(run.error_message);
+  }, [run?.id, run?.error_code, run?.error_message]);
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
@@ -320,7 +344,7 @@ function App() {
     };
   }, [selected, runPage, run?.id, run?.state]);
   useEffect(() => {
-    if (!run) return;
+    if (!run || tab !== "reports") return;
     let cancelled = false;
     let timer: number | undefined;
     const poll = async () => {
@@ -334,7 +358,8 @@ function App() {
               PAGE +
               "&offset=" +
               resultPage * PAGE +
-              (filter ? "&status=" + filter : ""),
+              (filter ? "&status=" + filter : "") +
+              (domainFilter ? "&domain=" + encodeURIComponent(domainFilter) : ""),
           ),
         ]);
         if (!cancelled) {
@@ -344,7 +369,7 @@ function App() {
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       }
-      if (!cancelled && ["queued", "running"].includes(run.state)) {
+      if (!cancelled && ["queued", "running", "pausing"].includes(run.state)) {
         timer = window.setTimeout(poll, 1000);
       }
     };
@@ -353,7 +378,7 @@ function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [run?.id, run?.state, resultPage, filter]);
+  }, [run?.id, run?.state, resultPage, filter, domainFilter, tab]);
   const pager = (page: number, setPage: (n: number) => void, count: number) => (
     <div className="pager">
       <button disabled={page === 0} onClick={() => setPage(page - 1)}>
@@ -369,6 +394,7 @@ function App() {
     setSelected(r);
     setRun(null);
     setResults([]);
+    setDomainFilter(""); setDomains([]); setAuthAlert("");
     setItemPage(0);
     setRunPage(0);
     setResultPage(0);
@@ -377,9 +403,19 @@ function App() {
   const chooseRun = (r: Run) => {
     setResults([]);
     setRun(r);
+    setReviewMode(r.selection_mode ?? "full");
     setResultPage(0);
     setFilter("");
   };
+  const controlRun = (operation: "pause" | "resume" | "restart") => act(async () => {
+    if (!run) return;
+    const updated = await api<Run>(`/runs/${run.id}/${operation}`, {
+      method: "POST", ...(operation === "restart" ? { body: json({ selection_mode: reviewMode }) } : {}),
+    });
+    if (operation === "restart") chooseRun(updated);
+    else setRun(updated);
+    setNotice(operation === "restart" ? `已按${updated.selection_mode === "missing" ? "查漏补缺" : "全量审查"}重新开始，旧批次保留。` : operation === "pause" ? "已请求暂停，将在当前项结束后生效。" : "已继续审查。");
+  });
   const kwFrom = (k: Keyword) => {
     setEntry(Object.fromEntries(Object.keys(keywordFields).map(key => [key, String(k.payload[key] ?? "")])));
     setAction("update");
@@ -430,7 +466,7 @@ function App() {
     ? results.map(r => ({ itemId: r.item_id, domain: r.domain, fields: r.fields, note: r.note,
         noteVersion: r.note_version, result: r }))
     : items.map(i => ({ itemId: i.id, domain: i.domain, fields: i.current, note: i.note,
-        noteVersion: i.note_version, item: i }));
+        noteVersion: i.note_version, item: i, result: i.review ? { ...i.review, pending_review: i.pending_review } : undefined }));
 
   const reviewTable = () => <div className="review-scroll" aria-label="测试详情表格">
     <table className="review-table">
@@ -451,27 +487,25 @@ function App() {
       </thead>
       <tbody>{tableRows.map(row => {
         const r = row.result;
-        const status = r?.status ?? "pending";
+        const pending = !!r?.pending_review && (!["error", "missing_keyword"].includes(r.status) || !!r.stale);
+        const status = pending ? "pending" : r?.status ?? "pending";
         const canEdit = selected?.owner_id === user?.id;
         return <tr key={row.itemId} className={`review-row review-${status}`}>
           <td className="domain-cell">{row.domain}</td>
           {reportColumns.map(c => <td key={c}>{c === "附件链接"
             ? <AttachmentLinks value={row.fields[c] ?? ""} /> : row.fields[c] ?? ""}</td>)}
-          <td className="ai-cell">{r?.ai_threshold ?? ""}</td>
-          <td className="ai-cell">{r?.ai_value ?? ""}</td>
+          <td className="ai-cell">{pending ? "" : r?.ai_threshold ?? ""}</td>
+          <td className="ai-cell">{pending ? "" : r?.ai_value ?? ""}</td>
           <td className="ai-cell">{r && status !== "pending" && <button
             className={`verdict-button verdict-${status}`} onClick={() => setVerdictDetail(r)}
             title="查看审查依据和建议">{status === "needs_review" ? "待确认" : labels[status]}</button>}</td>
           <td className="ai-cell"><NoteCell itemId={row.itemId} note={row.note ?? ""}
             version={row.noteVersion ?? 0} editable={canEdit} /></td>
           <td><span className={`review-state state-${status}`}>
-            {status === "pending" ? "待审查" : status === "error" ? "执行失败" : "已审查"}
+            {status === "pending" || status === "missing_keyword" ? "待审查" : status === "error" ? "执行失败" : "已审查"}
           </span></td>
           <td className="row-actions">{canEdit ? <div className="actions">
             <button disabled={busy} aria-label="调整关键词" title="调整关键词" onClick={() => void adjustKeyword(row)}>关键词</button>
-            {row.item && <button onClick={() => {
-              setEdit(row.item!); setEditFields({ ...row.fields }); setReason("");
-            }}>修订字段</button>}
           </div> : "只读"}</td>
         </tr>;
       })}</tbody>
@@ -570,7 +604,8 @@ function App() {
           <b>{user.username}</b>
           <p>{user.role === "admin" ? "管理员" : "普通用户"}</p>
           <button
-            onClick={() => {
+            onClick={() => void act(async () => {
+              await api("/auth/logout", { method: "POST" });
               token = "";
               setUser(null);
               setSelected(null);
@@ -582,10 +617,10 @@ function App() {
               setChanges([]);
               setUsers([]);
               setAudit([]);
-              setEdit(null);
+              setAuthAlert("");
               setPermission(null);
               setDecision(null);
-            }}
+            })}
           >
             退出登录
           </button>
@@ -607,13 +642,12 @@ function App() {
             </h1>
           </div>
           <span className="pill">
-            {mode === "demo" ? "演示环境" : "内网环境"}
+            {mode === "demo" ? "演示环境" : mode === "local" ? "本地接入" : "内网环境"}
           </span>
         </header>
         {mode === "demo" && (
           <div className="banner">
-            演示模式 · 当前审查结果统一标记“待人工确认”，尚未调用内网 AI
-            和附件。
+            演示模式 · 缺少关键词时直接标记，其余项标记“待人工确认”；不调用内网 AI 和附件。
           </div>
         )}
         {error && (
@@ -705,23 +739,28 @@ function App() {
                           原始文件
                         </button>
                         {selected.owner_id === user.id && (
+                          <>
+                          <select className="review-mode" aria-label="审查模式" value={reviewMode}
+                            onChange={e => setReviewMode(e.target.value as "full" | "missing")}>
+                            <option value="full">全量审查</option><option value="missing">查漏补缺</option>
+                          </select>
                           <button
                             className="primary"
-                            disabled={busy}
+                            disabled={busy || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
                             onClick={() =>
                               void act(async () => {
                                 const r = await api<Run>(
                                   "/reports/" + selected.id + "/runs",
-                                  { method: "POST" },
+                                  { method: "POST", body: json({ selection_mode: reviewMode }) },
                                 );
                                 chooseRun(r);
-                                setResultPage(itemPage);
                                 setNotice("审查已提交，等待后台进程执行");
                               })
                             }
                           >
                             AI 审查
                           </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -747,27 +786,39 @@ function App() {
                         <span>{run.failed} 项执行失败</span>
                       </div>
                       <progress max={run.total || 1} value={run.completed} />
-                      <p className="muted small">批次版本 {run.revision} · 模型 {run.model} · {run.mode}</p>
+                      <p className="muted small">{run.selection_mode === "missing" ? "查漏补缺" : "全量审查"} · 模型 {run.model || "本地接入"} · {run.mode}</p>
                       <div className="section-head">
                         <select aria-label="筛选审查状态" value={filter} onChange={e => {
                           setFilter(e.target.value); setResultPage(0);
                         }}>
                           <option value="">全部审查结果</option>
-                          {["passed", "failed", "needs_review", "error", "pending"].map(s => (
+                          {["passed", "failed", "needs_review", "missing_keyword", "error", "pending"].map(s => (
                             <option key={s} value={s}>{s === "pending" ? "待审查" : labels[s]}</option>
                           ))}
                         </select>
                         <div className="actions">
-                          <button onClick={() => { setItemPage(resultPage); setRun(null); }}>查看并修订测试项</button>
-                          <button disabled={["queued", "running"].includes(run.state) || busy}
+                          <button onClick={() => { setItemPage(0); setRun(null); }}>查看全部测试项</button>
+                          {selected.owner_id === user.id && <>
+                            {["queued", "running", "pausing"].includes(run.state) && <button disabled={busy || run.state === "pausing"}
+                              onClick={() => void controlRun("pause")}>{run.state === "pausing" ? "正在暂停…" : "暂停"}</button>}
+                            {["paused", "blocked"].includes(run.state) && <button disabled={busy} onClick={() => void controlRun("resume")}>继续</button>}
+                            <button disabled={busy} onClick={() => void controlRun("restart")}>重新开始（{reviewMode === "missing" ? "查漏补缺" : "全量"}）</button>
+                          </>}
+                          <button disabled={["queued", "running", "pausing", "paused"].includes(run.state) || busy}
                             onClick={() => void act(async () => {
                               await download("/runs/" + run.id + "/export", "审查结果-" + run.id.slice(0, 8) + ".xlsx");
                             })}>导出 Excel</button>
                         </div>
                       </div>
                     </>}
+                    <div className="domain-filter">
+                      <label>领域 <select aria-label="领域筛选" value={domainFilter} title="只筛选展示内容，审查范围为整份报告"
+                        onChange={e => { setDomainFilter(e.target.value); setItemPage(0); setResultPage(0); }}>
+                        <option value="">全部领域</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}
+                      </select></label>
+                    </div>
                     <h3>{run ? "审查结果" : "解析后的测试项"}</h3>
-                    {!run && <p className="muted small">点击 AI 审查后，结果会在同一表格中逐项刷新。备注填写后点击“保存备注”。</p>}
+                    {!run && <p className="muted small">原始字段只读。关键词生效后相关项变为待审查，查漏补缺仅处理待审查项。备注填写后点击“保存备注”。</p>}
                     {reviewTable()}
                     {pager(run ? resultPage : itemPage, run ? setResultPage : setItemPage, tableRows.length)}
                   </>
@@ -953,6 +1004,10 @@ function App() {
           </section>
         )}
       </main>
+      {authAlert && <div className="overlay"><section role="alertdialog" aria-modal="true" aria-label="审查已停止" className="modal card">
+        <h2>审查已停止</h2><p>{authAlert}</p><p className="muted">请联系管理员处理，重新登录后可继续，或按所选模式重新开始。</p>
+        <button className="primary" onClick={() => setAuthAlert("")}>我知道了</button>
+      </section></div>}
       {verdictDetail && <div className="overlay" onClick={() => setVerdictDetail(null)}>
         <section role="dialog" aria-modal="true" aria-label="AI 审查详情" className="modal card verdict-modal"
           onClick={e => e.stopPropagation()}>
@@ -966,75 +1021,6 @@ function App() {
             <dt>修改建议</dt><dd>{verdictDetail.suggestion || "—"}</dd></dl>
         </section>
       </div>}
-      {edit && (
-        <div className="overlay">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-label="修订测试项"
-            className="modal card"
-          >
-            <h2>修订测试项 · 版本 {edit.version}</h2>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void act(async () => {
-                  await api("/items/" + edit.id, {
-                    method: "PATCH",
-                    body: json({
-                      version: edit.version,
-                      fields: editFields,
-                      reason,
-                    }),
-                  });
-                  setItems(
-                    await api<Item[]>(
-                      "/reports/" +
-                        selected!.id +
-                        "/items?limit=" +
-                        PAGE +
-                        "&offset=" +
-                        itemPage * PAGE,
-                    ),
-                  );
-                  await loadReports();
-                  setEdit(null);
-                  setNotice("字段已修订，历史审查快照保持不变");
-                });
-              }}
-            >
-              {Object.entries(editFields).map(([k, v]) => (
-                <label key={k}>
-                  {k}
-                  <textarea
-                    rows={2}
-                    value={v}
-                    onChange={(e) =>
-                      setEditFields({ ...editFields, [k]: e.target.value })
-                    }
-                  />
-                </label>
-              ))}
-              <label>
-                修改原因
-                <textarea
-                  required
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                />
-              </label>
-              <div className="actions">
-                <button type="button" onClick={() => setEdit(null)}>
-                  取消
-                </button>
-                <button className="primary" disabled={busy}>
-                  保存修订
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      )}
       {decision && (
         <div className="overlay">
           <section

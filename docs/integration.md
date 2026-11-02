@@ -1,9 +1,9 @@
 # 内网集成契约
 
-在 backend 下创建你的包，例如 corp/adapters.py（corp/__init__.py 需存在），配置 INTEGRATION_MODULE=corp.adapters。
+优先使用本机被 Git 忽略的 local_adapters 目录（后文“内网接入”）；以下 INTEGRATION_MODULE 契约兼容旧适配器。
 
 1. authenticate(username, password) -> {"username": "经过认证的稳定账号标识"}
-   向内网鉴权接口验证。密码只在此次调用中使用，勿持久化或记日志。
+   向内网鉴权接口验证。旧适配器仅在此次调用中使用密码；新内网接入由公共层加密临时保存，禁止明文持久化或记日志。
    如果下载需要登录态，在集成方安全凭据库中按稳定 username 管理；多进程间可共享，过期后明确失败。
    系统角色由本地 users 表控制，内网接口或前端返回的 role 不会作为系统管理员依据。
    BOOTSTRAP_ADMINS 是首次注册的管理员白名单；后续修改由管理员权限页进行。
@@ -59,7 +59,7 @@ POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, rea
 “第一轮”占前两行，“门限、值、备注、附件链接”在第三行。程序按标签识别，不硬编码行列号。
 实际报告不再兼容前期错误样例中的两行表头；单行简化演示模板单独保留。
 识别 11 个业务字段：上层用例编号至单位，下层门限、值、备注、附件链接。
-测试对象列纳入解析、修订、批次快照及结果导出；纵向合并时沿用首格。
+测试对象列纳入解析、批次快照及结果导出；原始字段只读，纵向合并时沿用首格。
 旧 11 字段模板兼容读取，但缺少测试对象时不会匹配五列关键词。
 纵向合并字段沿用首格；横向合并说明不扩散到“值”列。
 测试详情标题后 30 行内查找表头；重复字段或多测试详情区域会明确报错，避免选择错误轮次。
@@ -75,6 +75,36 @@ POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, rea
 PATCH /api/items/{id}/note：{note, version}，首次 version=0，后续使用 note_version，冲突返回 409。
 仅报告本人可修改备注，管理员查看他人报告时只读；备注修改保留审计记录，不改变 AI 原始结果或报告版本。
 每行均可进入关键词调整，匹配四字段后关联已有词条或新建申请；原有审批规则继续生效。
+
+## 内网接入与自动刷新
+
+本地文件不纳入 Git：login_adapter.py 提供 login(username, password) 和 fetchimage(url, cookies)；
+review_rules.py 提供 RULE_VERSION 和 review_item(unit, keyword, attachment_urls, fetchimage)。
+每条测试项先由系统读取单位、按 a～d 查询匹配关键词并取 e 字符串、解析附件地址，再调用该函数。
+未匹配到关键词或 e 为空时，系统直接返回 missing_keyword（缺少关键词），不调用审查函数、不请求图片/模型。
+该结果保留待审查资格，补齐关键词后可补审。无附件传 []；图片不预先下载，由审查函数内部调用系统传入的 fetchimage(url)。
+该回调已绑定当前登录用户，内部调用 login_adapter.fetchimage(url, cookies)，并负责认证重试和图片校验。
+login 返回 {username, cookies}，cookies 为可序列化的 dict/list；fetchimage 在 Cookie 失效时抛 CookieExpired。
+公共层用当前用户的 Cookie 获取图片，遇 CookieExpired 自动重新登录一次并重试一次。
+仍失败则批次进入 blocked，保留后续 pending，不再领取该批次；API 返回 auth_session_failed，前端显示联系管理员弹窗。
+不将密码、Cookie、内网 API 错误响应或原始异常文本发往浏览器、模型或日志。
+重新登录后用户可继续；继续会重试认证失败的当前项，而非跳过它。
+内网凭据由 Fernet 加密，密钥从本机 SECRET_KEY 派生，默认 8 小时未更新失效；API/Worker 共用数据库和密钥。
+退出登录或管理员停用用户会删除其暂存凭据。普通 Bearer Token 的有效期仍单独受 TOKEN_MINUTES 控制。
+
+## 审查模式与控制
+
+POST /api/reports/{id}/runs：{selection_mode:"full|missing"}，不传默认 full。
+full 选择全部测试项；missing 只选择当前待审查项，无待审查项返回 409。
+POST /api/runs/{id}/pause、resume、restart 控制报告本人的批次；管理员不能控制别人的任务。
+暂停等待当前项结束；paused 批次仍占用该报告的活动任务位置。
+restart 接受 {selection_mode:"full|missing"}，按界面当前选定模式创建新批次并保留旧批次；不传时沿用该批次模式。
+旧 Worker 被隔离，不能回写已经重启的批次。missing 模式若没有待审查项，拒绝重启并保留现状。
+关键词申请待审批时不影响状态；管理员修改/审批生效后，匹配的项增加规则修订号并变为待审查。
+批次冻结关键词与项修订号；审查过程中生效的新关键词不会被旧结果误标成已完成，需下一次补审处理。
+原始批次结果保留，pending_review 表示当前关键词下仍需审查。
+领域筛选只影响展示，在服务端过滤后分页，不改变全量/补审选择范围。
+GET /api/reports/{id}/domains 返回整份报告的领域；items 和 run results 接受 domain 参数。
 
 ## 操作记录摘要
 

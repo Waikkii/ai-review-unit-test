@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     demo_password: str = ""
     bootstrap_admins: str = ""
     integration_module: str = "app.integrations"
+    local_auth_module: str = ""
+    local_review_module: str = ""
+    credential_ttl_seconds: int = 28800
     ai_base_url: str = ""
     ai_api_key: str = ""
     ai_model: str = ""
@@ -26,11 +29,13 @@ class Settings(BaseSettings):
             raise RuntimeError("SECRET_KEY 必须至少 32 个字符，请运行 scripts/setup.py")
         if self.lease_seconds < 300:
             raise RuntimeError("LEASE_SECONDS 不能小于 300 秒")
-        if self.app_mode not in {"demo", "production"}:
-            raise RuntimeError("APP_MODE 必须是 demo 或 production")
+        if self.app_mode not in {"demo", "local", "production"}:
+            raise RuntimeError("APP_MODE 必须是 demo、local 或 production")
+        if self.app_mode == "local" and not (self.local_auth_module and self.local_review_module):
+            raise RuntimeError("本地接入模式必须配置 LOCAL_AUTH_MODULE 和 LOCAL_REVIEW_MODULE")
         if self.app_mode == "demo" and len(self.demo_password) < 12:
             raise RuntimeError("演示密码至少 12 个字符")
-        if self.app_mode == "production" and self.integration_module == "app.integrations":
+        if self.app_mode == "production" and self.integration_module == "app.integrations" and not (self.local_auth_module and self.local_review_module):
             raise RuntimeError("生产模式必须配置内网 INTEGRATION_MODULE")
         if self.app_mode == "production" and not self.database_url.startswith("postgresql"):
             raise RuntimeError("生产模式必须使用 PostgreSQL")

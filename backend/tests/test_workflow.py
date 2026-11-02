@@ -78,14 +78,16 @@ def test_run_progress_export_and_immutable_snapshots(client, headers):
     item = client.get(f"/api/reports/{rid}/items",headers=h).json()[0]
     fields = {**item["current"], "备注":"=1+1"}
     response = client.patch('/api/items/'+item["id"],headers=h,json={"version":1,"fields":fields,"reason":"补充备注"})
-    assert response.status_code == 200
+    assert response.status_code == 409
+    assert client.patch('/api/items/'+item["id"]+'/note',headers=h,
+        json={"version":0,"note":"=1+1"}).status_code == 200
     assert client.patch('/api/items/'+item["id"],headers=h,
         json={"version":1,"fields":fields,"reason":"旧版本"}).status_code == 409
     assert process_once()
     detail = client.get('/api/runs/'+run["id"],headers=h).json()
     assert (detail["state"],detail["completed"],detail["failed"]) == ("completed",3,0)
     results = client.get('/api/runs/'+run["id"]+'/results',headers=h).json()
-    assert all(r["status"] == "needs_review" and r["raw"]["demo"] for r in results)
+    assert all(r["status"] == "missing_keyword" and r["raw"]["demo"] for r in results)
     assert next(r for r in results if r["item_id"]==item["id"])["fields"]["备注"] == ""
     assert client.get(f"/api/reports/{rid}/original",headers=h).content == original
     exported = client.get('/api/runs/'+run["id"]+'/export',headers=h)
@@ -94,7 +96,7 @@ def test_run_progress_export_and_immutable_snapshots(client, headers):
     assert len(book.worksheets[-1]["A"]) == 4
     book.close()
     second = client.post(f"/api/reports/{rid}/runs",headers=h).json()
-    assert second["revision"] == 2
+    assert second["revision"] == 1
     process_once()
     book = load_workbook(BytesIO(client.get('/api/runs/'+second["id"]+'/export',headers=h).content))
     assert any(cell.value == "'=1+1" for row in book.worksheets[-1] for cell in row)
@@ -192,7 +194,7 @@ def test_live_reviewer_rejects_unapproved_attachment_host(monkeypatch):
     monkeypatch.setattr(settings,"attachment_hosts","intranet.example")
     import pytest
     with pytest.raises(ValueError,match="允许列表"):
-        review({"附件链接":"http://evil.example/x.jpg"},[],"demo")
+        review({"附件链接":"http://evil.example/x.jpg"},[{"payload":{"e":"功率"}}],"demo")
 
 def test_worker_rejects_mismatched_rule_version(client, headers, monkeypatch):
     import app.worker as worker

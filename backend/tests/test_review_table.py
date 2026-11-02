@@ -3,7 +3,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 from sqlalchemy import create_engine, inspect
 
-from app.models import Base, ItemNote, ResultMeasurements
+from app.models import Base, ItemNote, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential
 from app.schemas import ReviewVerdict
 from app.worker import process_once
 from test_workflow import upload
@@ -89,14 +89,20 @@ def test_progress_measurements_notes_filters_and_export(client, headers, monkeyp
 def test_additive_upgrade_is_idempotent_and_preserves_existing_tables(tmp_path, monkeypatch):
     import app.migrate as migration
     engine = create_engine("sqlite:///" + (tmp_path / "legacy.db").as_posix())
-    old_tables = [t for t in Base.metadata.sorted_tables if t not in (ItemNote.__table__, ResultMeasurements.__table__)]
+    added = (ItemNote.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
+             ResultWork.__table__, RunControl.__table__, SessionCredential.__table__)
+    old_tables = [t for t in Base.metadata.sorted_tables if t not in added]
     Base.metadata.create_all(engine, tables=old_tables)
     with engine.begin() as connection:
         connection.exec_driver_sql("INSERT INTO users (id, username, role, active, created_at) VALUES ('old', 'existing', 'user', 1, CURRENT_TIMESTAMP)")
+        connection.exec_driver_sql("DROP INDEX one_active_run_per_report")
+        connection.exec_driver_sql("CREATE UNIQUE INDEX one_active_run_per_report ON runs (report_id) WHERE state IN ('queued', 'running')")
     monkeypatch.setattr(migration, "engine", engine)
     migration.main()
     migration.main()
-    assert {"item_notes", "result_measurements"} <= set(inspect(engine).get_table_names())
+    assert {"item_notes", "result_measurements", "item_review_states", "result_work", "run_controls", "session_credentials"} <= set(inspect(engine).get_table_names())
+    indexes = inspect(engine).get_indexes("runs")
+    assert "paused" in str(next(i for i in indexes if i["name"] == "one_active_run_per_report")["dialect_options"]["sqlite_where"])
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT username FROM users WHERE id='old'").scalar() == "existing"
     engine.dispose()

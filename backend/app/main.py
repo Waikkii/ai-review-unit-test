@@ -4,18 +4,20 @@ import json
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query
 from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
-from .db import get_db, uid
-from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements
-from .schemas import Login, ItemEdit, NoteEdit, KeywordChange, KeywordEntryChange, Decision, UserChange
+from .db import get_db, uid, now
+from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential
+from .schemas import Login, ItemEdit, NoteEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
 from .auth import authenticate, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
 from .audit_view import SUMMARY_ACTIONS, describe_activity
+from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, run_json as workflow_run_json
+from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE
 
 @asynccontextmanager
 async def lifespan(app):
@@ -45,8 +47,8 @@ def serial(obj, names):
 def report_json(r):
     return serial(r, "id owner_id filename sha256 revision item_count created_at")
 
-def run_json(r):
-    return serial(r, "id report_id actor_id revision state total completed failed model rule_version mode created_at")
+def run_json(r, db):
+    return workflow_run_json(db, r)
 
 @app.get("/api/health")
 def health():
@@ -70,6 +72,8 @@ def login(data: Login, db=Depends(get_db)):
         db.flush()
     if not user.active:
         raise HTTPException(403, "账号已停用")
+    if "_session_cookies" in identity:
+        store_credentials(db, name, data.username, data.password, identity["_session_cookies"])
     audit(db, user, "session.login", user.id)
     db.commit()
     return {"access_token": issue_token(user), "token_type": "bearer",
@@ -78,6 +82,13 @@ def login(data: Login, db=Depends(get_db)):
 @app.get("/api/auth/me")
 def me(user=Depends(current_user)):
     return serial(user, "id username role active")
+
+
+@app.post("/api/auth/logout")
+def logout(user=Depends(current_user), db=Depends(get_db)):
+    db.execute(delete(SessionCredential).where(SessionCredential.username == user.username))
+    db.commit()
+    return {"ok": True}
 
 @app.get("/api/reports")
 def reports(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
@@ -108,9 +119,11 @@ def upload(file: UploadFile = File(...), user=Depends(current_user), db=Depends(
         path.write_bytes(content)
         db.add(report)
         db.flush()
-        for row in rows:
-            db.add(Item(report_id=report.id, domain=row["domain"], row_number=row["row_number"],
-                        original=row["fields"], current=row["fields"]))
+        uploaded = [Item(id=uid(), report_id=report.id, domain=row["domain"], row_number=row["row_number"],
+                         original=row["fields"], current=row["fields"]) for row in rows]
+        db.add_all(uploaded)
+        db.flush()
+        db.add_all([ItemReviewState(item_id=item.id, revision=1, reviewed_revision=0) for item in uploaded])
         audit(db, user, "report.upload", report.id,
               after={"filename": filename, "sha256": report.sha256, "items": len(rows)})
         db.commit()
@@ -122,12 +135,32 @@ def upload(file: UploadFile = File(...), user=Depends(current_user), db=Depends(
 
 @app.get("/api/reports/{report_id}/items")
 def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+          domain: str | None = None,
           user=Depends(current_user), db=Depends(get_db)):
     visible_report(db, report_id, user)
-    rows = db.execute(select(Item, ItemNote).outerjoin(ItemNote, ItemNote.item_id == Item.id)
-        .where(Item.report_id == report_id).order_by(Item.domain, Item.row_number).offset(offset).limit(limit))
+    query = select(Item, ItemNote, ItemReviewState, Result, ResultMeasurements, ResultWork).outerjoin(ItemNote, ItemNote.item_id == Item.id)
+    query = query.outerjoin(ItemReviewState, ItemReviewState.item_id == Item.id)
+    query = query.outerjoin(Result, Result.id == ItemReviewState.source_result_id)
+    query = query.outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id).where(Item.report_id == report_id)
+    query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id)
+    if domain:
+        query = query.where(Item.domain == domain)
+    rows = db.execute(query.order_by(Item.domain, Item.row_number).offset(offset).limit(limit))
     return [{**serial(i, "id report_id domain row_number original current version"),
-             "note": note.note if note else "", "note_version": note.version if note else 0} for i, note in rows]
+             "note": note.note if note else "", "note_version": note.version if note else 0,
+             "pending_review": is_pending(state),
+             "review": {**serial(result, "id item_id domain row_number fields status explanation evidence suggestion"),
+                        "ai_threshold": measured.ai_threshold if measured else "",
+                        "ai_value": measured.ai_value if measured else ""}
+                        if result and (not is_pending(state) or result.status == "missing_keyword"
+                            and state.revision == (work.item_revision if work else 1)) else None}
+            for i, note, state, result, measured, work in rows]
+
+
+@app.get("/api/reports/{report_id}/domains")
+def report_domains(report_id: str, user=Depends(current_user), db=Depends(get_db)):
+    visible_report(db, report_id, user)
+    return list(db.scalars(select(Item.domain).where(Item.report_id == report_id).distinct().order_by(Item.domain)))
 
 
 @app.patch("/api/items/{item_id}/note")
@@ -157,16 +190,8 @@ def edit_item(item_id: str, data: ItemEdit, user=Depends(current_user), db=Depen
     item = db.get(Item, item_id)
     if not item:
         raise HTTPException(404, "测试项不存在")
-    report = visible_report(db, item.report_id, user, write=True)
-    before = item.current
-    updated = db.execute(update(Item).where(Item.id == item.id, Item.version == data.version)
-                         .values(current=data.fields, version=data.version + 1))
-    if updated.rowcount != 1:
-        raise HTTPException(409, "测试项版本已变化，请刷新")
-    db.execute(update(Report).where(Report.id == report.id).values(revision=Report.revision + 1))
-    audit(db, user, "item.edit", item.id, before, data.fields, data.reason)
-    db.commit()
-    return {"version": data.version + 1}
+    visible_report(db, item.report_id, user, write=True)
+    raise HTTPException(409, "解析后的原始字段只读；可添加用户备注或调整关键词")
 
 @app.get("/api/reports/{report_id}/original")
 def original(report_id: str, user=Depends(current_user), db=Depends(get_db)):
@@ -176,61 +201,104 @@ def original(report_id: str, user=Depends(current_user), db=Depends(get_db)):
     return FileResponse(settings.data_dir / (report.id + ".xlsx"), filename=report.filename)
 
 @app.post("/api/reports/{report_id}/runs", status_code=201)
-def start_run(report_id: str, user=Depends(current_user), db=Depends(get_db)):
+def start_run(report_id: str, data: StartReview | None = None, user=Depends(current_user), db=Depends(get_db)):
     report = visible_report(db, report_id, user, write=True)
-    # 同 edit_item 的 report UPDATE 锁串行化；编辑版本与本批次快照一致。
-    db.execute(update(Report).where(Report.id == report_id).values(revision=Report.revision))
-    db.refresh(report)
-    if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(["queued", "running"]))):
-        raise HTTPException(409, "该报告已有正在执行的审查")
-    keywords = [keyword_dict(k) for k in db.scalars(select(Keyword).where(Keyword.deleted.is_(False)))]
-    run = Run(report_id=report.id, actor_id=user.id, revision=report.revision,
-              total=report.item_count, keyword_snapshot=keywords,
-              model="demo" if settings.app_mode == "demo" else settings.ai_model,
-              rule_version=rule_version(), mode=settings.app_mode)
-    db.add(run)
-    db.flush()
-    for item in db.scalars(select(Item).where(Item.report_id == report.id)):
-        db.add(Result(run_id=run.id, item_id=item.id, domain=item.domain,
-                      row_number=item.row_number, fields=item.current))
-    audit(db, user, "run.start", run.id, after={"report_id": report.id, "revision": report.revision,
-          "model": run.model, "rule_version": run.rule_version, "keywords": keywords})
+    lock_report(db, report)
+    run = create_run(db, report, user, data.selection_mode if data else "full")
     db.commit()
-    return run_json(run)
+    return run_json(run, db)
+
+
+@app.post("/api/runs/{run_id}/{operation}")
+def control_run(run_id: str, operation: str, data: StartReview | None = None,
+                user=Depends(current_user), db=Depends(get_db)):
+    if operation not in {"pause", "resume", "restart"}:
+        raise HTTPException(404, "操作不存在")
+    run = visible_run(db, run_id, user)
+    report = visible_report(db, run.report_id, user, write=True)
+    lock_report(db, report)
+    run = db.scalar(select(Run).where(Run.id == run_id).with_for_update().execution_options(populate_existing=True))
+    if operation == "restart":
+        control = db.get(RunControl, run.id)
+        selection_mode = data.selection_mode if data else control.selection_mode if control else "full"
+        # Fence the old worker before creating a new batch in the chosen mode.
+        if run.state in ACTIVE_STATES or run.state == "blocked":
+            run.state, run.lease_owner, run.lease_until = "cancelled", None, None
+            db.flush()
+        run = create_run(db, report, user, selection_mode)
+    elif operation == "pause":
+        if run.state == "queued" or (run.state == "running" and (run.lease_until is None or run.lease_until < now())):
+            run.state, run.lease_owner, run.lease_until = "paused", None, None
+        elif run.state == "running":
+            run.state = "pausing"
+        elif run.state not in {"pausing", "paused"}:
+            raise HTTPException(409, "当前批次不能暂停")
+    else:
+        if run.state not in {"paused", "blocked"}:
+            raise HTTPException(409, "当前批次不能继续，请等待暂停完成")
+        if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.id != run.id, Run.state.in_(ACTIVE_STATES))):
+            raise HTTPException(409, "该报告已有其他活动审查")
+        if run.state == "blocked":
+            for result in db.scalars(select(Result).where(Result.run_id == run.id, Result.status == "error")):
+                if result.raw.get("error_type") == "SessionAuthFailure" or result.explanation == AUTH_FAILURE_MESSAGE:
+                    db.execute(delete(ResultMeasurements).where(ResultMeasurements.result_id == result.id))
+                    result.status, result.explanation, result.suggestion, result.raw = "pending", "", "", {}
+                    result.evidence = []
+                    run.completed -= 1
+                    run.failed -= 1
+        run.state, run.lease_owner, run.lease_until = "queued", None, None
+        control = db.get(RunControl, run.id)
+        if control:
+            control.error_code = control.error_message = ""
+    audit(db, user, "run." + operation, run.id)
+    db.commit()
+    return run_json(run, db)
 
 @app.get("/api/reports/{report_id}/runs")
 def runs(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
          user=Depends(current_user), db=Depends(get_db)):
     visible_report(db, report_id, user)
-    return [run_json(r) for r in db.scalars(select(Run).where(Run.report_id == report_id)
+    return [run_json(r, db) for r in db.scalars(select(Run).where(Run.report_id == report_id)
             .order_by(Run.created_at.desc()).offset(offset).limit(limit))]
 
 @app.get("/api/runs/{run_id}")
 def run_detail(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     run = visible_run(db, run_id, user)
-    return {**run_json(run), "keyword_snapshot": run.keyword_snapshot}
+    return {**run_json(run, db), "keyword_snapshot": run.keyword_snapshot}
 
 @app.get("/api/runs/{run_id}/results")
 def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
-            status: str | None = None, user=Depends(current_user), db=Depends(get_db)):
+            status: str | None = None, domain: str | None = None, user=Depends(current_user), db=Depends(get_db)):
     visible_run(db, run_id, user)
-    q = select(Result).where(Result.run_id == run_id)
+    q = select(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
+    q = q.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
+    pending = or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
+    stale = ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)
     if status:
-        q = q.where(Result.status == status)
-    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote)
+        if status == "pending":
+            q = q.where(or_(Result.status == "pending", and_(pending, or_(Result.status != "error", stale))))
+        elif status in {"error", "missing_keyword"}:
+            q = q.where(Result.status == status, ~stale)
+        else:
+            q = q.where(Result.status == status, ~pending)
+    if domain:
+        q = q.where(Result.domain == domain)
+    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork)
         .outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id)
         .outerjoin(ItemNote, ItemNote.item_id == Result.item_id)
         .order_by(Result.domain, Result.row_number).offset(offset).limit(limit))
     return [{**serial(r, "id item_id domain row_number fields status explanation evidence suggestion raw"),
              "ai_threshold": measured.ai_threshold if measured else "",
              "ai_value": measured.ai_value if measured else "",
-             "note": note.note if note else "", "note_version": note.version if note else 0}
-            for r, measured, note in rows]
+             "note": note.note if note else "", "note_version": note.version if note else 0,
+             "pending_review": is_pending(state),
+             "stale": bool(state and state.revision > (work.item_revision if work else 1))}
+            for r, measured, note, state, work in rows]
 
 @app.get("/api/runs/{run_id}/export")
 def export(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     run = visible_run(db, run_id, user)
-    if run.state in {"queued", "running"}:
+    if run.state in ACTIVE_STATES:
         raise HTTPException(409, "请等待本批次审查结束")
     result_rows = db.scalars(select(Result).where(Result.run_id == run.id).order_by(Result.domain, Result.row_number)).all()
     measurements = {m.result_id: m for m in db.scalars(select(ResultMeasurements).join(Result)
@@ -328,6 +396,8 @@ def change_user(user_id: str, data: UserChange, user=Depends(admin_user), db=Dep
         raise HTTPException(409, "不能变更自己的角色或启用状态")
     before = serial(target, "role active")
     target.role, target.active = data.role, data.active
+    if not data.active:
+        db.execute(delete(SessionCredential).where(SessionCredential.username == target.username))
     audit(db, user, "user.permissions", target.id, before, serial(target, "role active"), data.reason)
     db.commit()
     return serial(target, "id username role active")

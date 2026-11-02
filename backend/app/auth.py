@@ -16,6 +16,10 @@ def authenticate(username, password):
         if username not in {"demo", "admin"} or not compare_digest(password, settings.demo_password):
             raise ValueError("invalid credentials")
         return {"username": username}
+    if settings.local_auth_module:
+        from .auth_sessions import validate_identity
+        identity = validate_identity(importlib.import_module(settings.local_auth_module).login(username, password))
+        return {"username": identity["username"], "_session_cookies": identity["cookies"]}
     return importlib.import_module(settings.integration_module).authenticate(username, password)
 
 def issue_token(user):
