@@ -15,6 +15,7 @@ from .auth import authenticate, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
+from .audit_view import SUMMARY_ACTIONS, describe_activity
 
 @asynccontextmanager
 async def lifespan(app):
@@ -333,12 +334,25 @@ def change_user(user_id: str, data: UserChange, user=Depends(admin_user), db=Dep
 
 @app.get("/api/audit")
 def audits(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+           summary: bool = True,
            user=Depends(current_user), db=Depends(get_db)):
-    q = select(Audit)
+    q = select(Audit, User.username).join(User, User.id == Audit.actor_id)
     if user.role != "admin":
         q = q.where(Audit.actor_id == user.id)
-    return [serial(a, "id actor_id action object_id before after reason created_at")
-            for a in db.scalars(q.order_by(Audit.created_at.desc()).offset(offset).limit(limit))]
+    if summary:
+        q = q.where(Audit.action.in_(SUMMARY_ACTIONS))
+    rows = db.execute(q.order_by(Audit.created_at.desc(), Audit.id).offset(offset).limit(limit)).all()
+    ids = [a.object_id for a, _ in rows]
+    report_names = dict(db.execute(select(Report.id, Report.filename).where(Report.id.in_(ids))).all())
+    run_names = dict(db.execute(select(Run.id, Report.filename).join(Report, Report.id == Run.report_id)
+                               .where(Run.id.in_(ids))).all())
+    activities = []
+    for record, username in rows:
+        label, category, target = describe_activity(record, report_names, run_names)
+        activities.append({**serial(record, "id actor_id action object_id before after reason created_at"),
+                           "actor_username": username, "action_label": label, "category": category,
+                           "target_label": target})
+    return activities
 
 dist = ROOT / "frontend" / "dist"
 if dist.is_dir():

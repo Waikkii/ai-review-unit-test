@@ -75,3 +75,9 @@ POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, rea
 PATCH /api/items/{id}/note：{note, version}，首次 version=0，后续使用 note_version，冲突返回 409。
 仅报告本人可修改备注，管理员查看他人报告时只读；备注修改保留审计记录，不改变 AI 原始结果或报告版本。
 每行均可进入关键词调整，匹配四字段后关联已有词条或新建申请；原有审批规则继续生效。
+
+## 操作记录摘要
+
+GET /api/audit 默认只返回 report.upload、run.start、report.download、run.export、keyword.request，过滤在分页之前执行。
+返回 actor_username（用户名）、action_label（中文操作）、category 和 target_label（报告名/关键词对象），工作台不展示技术 ID 或原始 JSON。
+登录、逐项审查等详细留痕仍在数据库保留；排障可使用 summary=false，普通用户仍只能访问本人记录。

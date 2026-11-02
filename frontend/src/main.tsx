@@ -81,6 +81,10 @@ type Audit = {
   reason: string;
   before: unknown;
   after: unknown;
+  actor_username: string;
+  action_label: string;
+  category: string;
+  target_label: string;
 };
 const labels: Record<string, string> = {
   queued: "排队中",
@@ -136,6 +140,16 @@ const emptyEntry = () => ({ a: "", b: "", c: "", d: "", e: "" });
 const keywordText = (payload: Record<string, unknown>) =>
   Object.entries(keywordFields).map(([key, label]) => `${label}：${String(payload[key] ?? "")}`).join("\n");
 const reportColumns = ["测试对象", "用例编号", "用例名称", "测试小项", "指标名称", "测试条件", "判据门限", "单位", "门限", "值", "备注", "附件链接"];
+const columnWeights = [4, 5, 6, 9, 7, 6, 7, 5, 3, 5, 5, 7, 4, 4, 4, 5, 8, 5, 7];
+
+function AttachmentLinks({ value }: { value: string }) {
+  const links = value.match(/https?:\/\/[^\s<>"，,;；]+/gi) ?? [];
+  if (!links.length) return <span className="muted" title={value}>{value}</span>;
+  return <div className="attachment-links">{links.map((url, index) =>
+    <a key={`${index}-${url}`} href={url} target="_blank" rel="noopener noreferrer" title={url}>
+      {links.length === 1 ? "附件" : `附件${index + 1}`}
+    </a>)}</div>;
+}
 
 function NoteCell({ itemId, note, version, editable }: { itemId: string; note: string; version: number; editable: boolean }) {
   const [draft, setDraft] = useState(note);
@@ -195,6 +209,7 @@ function App() {
   const [edit, setEdit] = useState<Item | null>(null),
     [editFields, setEditFields] = useState<Record<string, string>>({}),
     [reason, setReason] = useState("");
+  const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
   const [action, setAction] = useState("create"),
     [entry, setEntry] = useState<Record<string, string>>(emptyEntry),
     [kwReason, setKwReason] = useState(""),
@@ -417,13 +432,10 @@ function App() {
     : items.map(i => ({ itemId: i.id, domain: i.domain, fields: i.current, note: i.note,
         noteVersion: i.note_version, item: i }));
 
-  const reviewTable = () => <div className="table-scroll review-scroll" tabIndex={0} aria-label="测试详情表格，可横向滚动">
+  const reviewTable = () => <div className="review-scroll" aria-label="测试详情表格">
     <table className="review-table">
       <colgroup>
-        <col style={{ width: 100 }} />
-        {reportColumns.map(c => <col key={c} style={{ width: 145 }} />)}
-        {["threshold", "value", "result", "note"].map(c => <col key={c} style={{ width: 170 }} />)}
-        <col style={{ width: 110 }} /><col style={{ width: 170 }} />
+        {columnWeights.map((weight, index) => <col key={index} style={{ width: `${weight / 106 * 100}%` }} />)}
       </colgroup>
       <thead>
         <tr className="review-groups">
@@ -443,22 +455,20 @@ function App() {
         const canEdit = selected?.owner_id === user?.id;
         return <tr key={row.itemId} className={`review-row review-${status}`}>
           <td className="domain-cell">{row.domain}</td>
-          {reportColumns.map(c => <td key={c}>{row.fields[c] ?? ""}</td>)}
+          {reportColumns.map(c => <td key={c}>{c === "附件链接"
+            ? <AttachmentLinks value={row.fields[c] ?? ""} /> : row.fields[c] ?? ""}</td>)}
           <td className="ai-cell">{r?.ai_threshold ?? ""}</td>
           <td className="ai-cell">{r?.ai_value ?? ""}</td>
-          <td className="ai-cell">{r && status !== "pending" && <details className="verdict-detail">
-            <summary className={`verdict-${status}`}>{labels[status]}</summary>
-            <p>{r.explanation}</p>
-            {!!r.evidence.length && <p>依据：{r.evidence.join("；")}</p>}
-            {r.suggestion && <p>建议：{r.suggestion}</p>}
-          </details>}</td>
+          <td className="ai-cell">{r && status !== "pending" && <button
+            className={`verdict-button verdict-${status}`} onClick={() => setVerdictDetail(r)}
+            title="查看审查依据和建议">{status === "needs_review" ? "待确认" : labels[status]}</button>}</td>
           <td className="ai-cell"><NoteCell itemId={row.itemId} note={row.note ?? ""}
             version={row.noteVersion ?? 0} editable={canEdit} /></td>
           <td><span className={`review-state state-${status}`}>
             {status === "pending" ? "待审查" : status === "error" ? "执行失败" : "已审查"}
           </span></td>
           <td className="row-actions">{canEdit ? <div className="actions">
-            <button disabled={busy} onClick={() => void adjustKeyword(row)}>调整关键词</button>
+            <button disabled={busy} aria-label="调整关键词" title="调整关键词" onClick={() => void adjustKeyword(row)}>关键词</button>
             {row.item && <button onClick={() => {
               setEdit(row.item!); setEditFields({ ...row.fields }); setReason("");
             }}>修订字段</button>}
@@ -533,7 +543,7 @@ function App() {
       <aside>
         <div className="brand">
           <span className="mark">审</span>
-          <b>报告审查工作台</b>
+          <b>审查工作台</b>
         </div>
         <p className="eyebrow">WORKSPACE</p>
         <nav>
@@ -656,27 +666,15 @@ function App() {
             </section>
             <div className="workspace">
               <section className="card report-list">
-                <h2>{user.role === "admin" ? "全部报告" : "我的报告"}</h2>
-                {!reports.length && (
-                  <p className="empty">暂无报告，上传 Excel 开始审查。</p>
-                )}
-                {reports.map((r) => (
-                  <button
-                    className={
-                      "report " + (selected?.id === r.id ? "selected" : "")
-                    }
-                    key={r.id}
-                    onClick={() => chooseReport(r)}
-                  >
-                    <strong>{r.filename}</strong>
-                    <span>
-                      {r.item_count} 个测试项 · 版本 {r.revision}
-                    </span>
-                    <small>
-                      {new Date(r.created_at + "Z").toLocaleString()}
-                    </small>
-                  </button>
-                ))}
+                <label className="report-picker">
+                  <span>{user.role === "admin" ? "全部报告" : "我的报告"}</span>
+                  <select aria-label="选择报告" value={reports.some(r => r.id === selected?.id) ? selected!.id : ""}
+                    onChange={e => { const report = reports.find(r => r.id === e.target.value); if (report) chooseReport(report); }}>
+                    <option value="">{reports.length ? "选择一份报告" : "暂无报告，请先上传"}</option>
+                    {reports.map(r => <option key={r.id} value={r.id}>{r.filename} · {r.item_count} 项 · {new Date(r.created_at + "Z").toLocaleDateString()}</option>)}
+                  </select>
+                </label>
+                <span className="report-picker-meta">{selected ? `${selected.item_count} 个测试项 · 版本 ${selected.revision}` : "上传后按领域展示测试项"}</span>
                 {pager(reportPage, setReportPage, reports.length)}
               </section>
               <section className="card detail">
@@ -727,7 +725,8 @@ function App() {
                         )}
                       </div>
                     </div>
-                    <h3>历史审查批次</h3>
+                    <details className="history-panel">
+                    <summary>审查历史 <span>{runs.length} 个批次</span></summary>
                     <div className="run-list">
                       {runs.map((r) => (
                         <button
@@ -741,6 +740,7 @@ function App() {
                       ))}
                     </div>
                     {pager(runPage, setRunPage, runs.length)}
+                    </details>
                     {run && <>
                       <div className="progress-head">
                         <b>{labels[run.state]} · {run.completed}/{run.total}</b>
@@ -895,27 +895,22 @@ function App() {
           </div>
         )}
         {tab === "audit" && (
-          <section className="card">
+          <section className="card activity-card">
             <h2>
               {user.role === "admin" ? "全体用户操作记录" : "我的操作记录"}
             </h2>
-            {audit.map((a) => (
-              <details className="audit" key={a.id}>
-                <summary>
-                  {new Date(a.created_at + "Z").toLocaleString()} · {a.action} ·{" "}
-                  {a.object_id.slice(0, 8)}
-                </summary>
-                <p>操作者：{a.actor_id}</p>
-                <p>原因：{a.reason || "—"}</p>
-                <pre>
-                  {JSON.stringify(
-                    { before: a.before, after: a.after },
-                    null,
-                    2,
-                  )}
-                </pre>
-              </details>
-            ))}
+            <p className="activity-intro">报告上传、AI 审查、文件下载和关键词变更申请</p>
+            <div className="activity-table-wrap"><table className="activity-table">
+              <thead><tr><th>操作时间</th><th>操作人</th><th>操作</th><th>报告 / 关键词</th><th>说明</th></tr></thead>
+              <tbody>{audit.map(a => <tr key={a.id}>
+                <td className="activity-time"><span>{new Date(a.created_at + "Z").toLocaleDateString()}</span>
+                  <small>{new Date(a.created_at + "Z").toLocaleTimeString()}</small></td>
+                <td><div className="actor-name"><span className="actor-avatar" aria-hidden="true">{a.actor_username.slice(0, 1).toUpperCase()}</span>{a.actor_username}</div></td>
+                <td><span className={`activity-tag activity-${a.category}`}>{a.action_label}</span></td>
+                <td className="activity-target">{a.target_label}</td><td className="activity-reason">{a.reason || "—"}</td>
+              </tr>)}</tbody>
+            </table></div>
+            {!audit.length && <p className="empty">暂无操作记录。</p>}
             {pager(auditPage, setAuditPage, audit.length)}
           </section>
         )}
@@ -958,6 +953,19 @@ function App() {
           </section>
         )}
       </main>
+      {verdictDetail && <div className="overlay" onClick={() => setVerdictDetail(null)}>
+        <section role="dialog" aria-modal="true" aria-label="AI 审查详情" className="modal card verdict-modal"
+          onClick={e => e.stopPropagation()}>
+          <div className="section-head"><h2>AI 审查详情</h2><button onClick={() => setVerdictDetail(null)}>关闭</button></div>
+          <p className="muted">{verdictDetail.domain} · {verdictDetail.fields["用例名称"]}</p>
+          <span className={`activity-tag verdict-${verdictDetail.status}`}>{labels[verdictDetail.status]}</span>
+          <dl><dt>识别门限</dt><dd>{verdictDetail.ai_threshold || "—"}</dd>
+            <dt>识别值</dt><dd>{verdictDetail.ai_value || "—"}</dd>
+            <dt>审查说明</dt><dd>{verdictDetail.explanation}</dd>
+            <dt>判断依据</dt><dd>{verdictDetail.evidence.join("；") || "—"}</dd>
+            <dt>修改建议</dt><dd>{verdictDetail.suggestion || "—"}</dd></dl>
+        </section>
+      </div>}
       {edit && (
         <div className="overlay">
           <section

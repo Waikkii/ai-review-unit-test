@@ -121,7 +121,7 @@ def test_keyword_approval_conflict_and_audit(client, headers):
     assert direct.status_code == 201 and direct.json()["state"] == "approved"
     assert client.get('/api/keywords',headers=user).json() == []
     assert any(a["action"] == "keyword.delete" and a["before"]["version"] == 2
-               for a in client.get('/api/audit',headers=admin).json())
+               for a in client.get('/api/audit?summary=false',headers=admin).json())
 
 def test_permissions_apply_to_existing_tokens(client, headers):
     admin,user = headers("admin"),headers()
@@ -183,7 +183,7 @@ def test_result_and_request_access_are_scoped(client, headers):
         assert client.get('/api/runs/'+run["id"]+suffix,headers=user).status_code == 404
     request=client.post('/api/keyword-requests',headers=admin,json=change()).json()
     assert client.get('/api/keyword-requests',headers=user).json() == []
-    assert not any(a["action"]=="keyword.create" for a in client.get('/api/audit',headers=user).json())
+    assert not any(a["action"]=="keyword.create" for a in client.get('/api/audit?summary=false',headers=user).json())
 
 def test_live_reviewer_rejects_unapproved_attachment_host(monkeypatch):
     from app.config import settings

@@ -35,7 +35,7 @@ def test_entry_approval_version_duplicate_and_delete(client, headers):
     assert submit(client, admin, "update", 1, ENTRY).status_code == 409
     assert submit(client, admin, "delete", 2, changed).status_code == 201
     assert client.get("/api/keywords", headers=user).json() == []
-    audits = client.get("/api/audit", headers=admin).json()
+    audits = client.get("/api/audit?summary=false", headers=admin).json()
     assert {a["action"] for a in audits} >= {"keyword.create", "keyword.update", "keyword.delete"}
 
 
