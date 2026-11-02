@@ -35,6 +35,23 @@ python -m venv .venv
 ```
 
 scripts/setup.py 生成未纳入 Git 的 .env，演示账号 demo、admin，随机密码见 DEMO_PASSWORD。
+
+### Windows 一键启动
+
+首次完成上面的环境和数据库初始化后，可直接双击根目录的 `start.cmd`：
+自动构建前端（源码未变化时跳过），后台启动 API 和 Worker，然后访问 http://127.0.0.1:8000 。
+关闭启动窗口不会停止系统；双击 `stop.cmd` 停止这两个进程。
+`git pull` 更新代码后，双击 `rebuild-start.cmd` 会停止旧进程、重新构建并启动。
+脚本自动定位项目目录，移动项目后无需改路径；日志和进程记录位于 `data/launcher/`，不上传 Git。
+已有手动启动的 API/Worker 请先关闭，再使用一键脚本。
+初次构建需要 Node.js、pnpm 和可用的依赖源/缓存；构建完成且源码未变化时，日常启动不需要构建工具或联网。
+如果更新修改了后端依赖，先运行 `.venv\Scripts\python -m pip install -r backend/requirements.lock.txt`。
+脚本不会重新生成 `.env` 或初始化/清空数据库。
+可用 PowerShell 查看状态：`powershell -NoProfile -File scripts/manage.ps1 -Action status`。
+默认仅本机访问；需要内网访问时使用 `start.cmd -BindAddress 你的内网IP`，重建时同样传给 `rebuild-start.cmd`。
+成功启动后会在本地保存该地址，后续双击启动或重新构建会沿用；可再次传入 `-BindAddress` 更换地址。
+可通过 `-Port 其他端口` 指定端口，停止/查看状态时需指定相同端口；非默认端口的日志放在 `data/launcher/端口/`。
+
 分别打开两个终端启动 API 与 Worker：
 
 ```text
