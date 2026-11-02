@@ -1,12 +1,13 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 ROOT = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
     app_mode: str = "production"
-    database_url: str = "postgresql+psycopg://review:review@127.0.0.1/review"
+    database_url: str = "sqlite:///./data/review.db"
     secret_key: str = ""
     data_dir: Path = ROOT / "data"
     demo_password: str = ""
@@ -25,6 +26,23 @@ class Settings(BaseSettings):
     token_minutes: int = 60
     lease_seconds: int = 300
 
+    @field_validator("database_url")
+    @classmethod
+    def absolute_sqlite_path(cls, value):
+        from sqlalchemy.engine import make_url
+        url = make_url(value)
+        if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+            path = Path(url.database)
+            if not path.is_absolute():
+                url = url.set(database=(ROOT / path).resolve().as_posix())
+                return url.render_as_string(hide_password=False)
+        return value
+
+    @field_validator("data_dir")
+    @classmethod
+    def absolute_data_dir(cls, value):
+        return value if value.is_absolute() else (ROOT / value).resolve()
+
     @property
     def review_model(self) -> str:
         return self.model or self.ai_model
@@ -40,7 +58,7 @@ class Settings(BaseSettings):
             raise RuntimeError("必须配置 LOCAL_AUTH_MODULE 和 LOCAL_REVIEW_MODULE")
         if self.app_mode == "demo" and len(self.demo_password) < 12:
             raise RuntimeError("演示密码至少 12 个字符")
-        if self.app_mode == "production" and not self.database_url.startswith("postgresql"):
-            raise RuntimeError("生产模式必须使用 PostgreSQL")
+        if self.app_mode == "production" and not self.database_url.startswith(("postgresql", "sqlite")):
+            raise RuntimeError("正式模式支持 SQLite 或 PostgreSQL")
 
 settings = Settings()

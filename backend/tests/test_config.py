@@ -18,3 +18,10 @@ def test_model_and_apply_token_load_from_env_file(tmp_path):
     settings = Settings(_env_file=env)
     assert settings.model == "local-model"
     assert settings.apply_token == "local-token"
+
+
+def test_relative_sqlite_and_upload_paths_are_resolved_from_project_root():
+    from app.config import ROOT
+    settings = Settings(_env_file=None, database_url="sqlite:///./data/review.db", data_dir="data/review_files")
+    assert settings.database_url == "sqlite:///" + (ROOT / "data" / "review.db").as_posix()
+    assert settings.data_dir == ROOT / "data" / "review_files"

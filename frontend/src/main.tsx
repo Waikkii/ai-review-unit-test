@@ -195,7 +195,7 @@ function NoteCell({ itemId, note, version, editable }: { itemId: string; note: s
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
-  const [name, setName] = useState("demo"),
+  const [name, setName] = useState(""),
     [password, setPassword] = useState("");
   const [tab, setTab] = useState("reports"),
     [error, setError] = useState(""),
@@ -568,7 +568,7 @@ function App() {
           </p>
         )}
         <p className="muted small">
-          演示环境使用 demo / admin，密码见本机 .env。
+          请使用内网账号和密码登录。
         </p>
       </main>
     );
@@ -642,7 +642,7 @@ function App() {
             </h1>
           </div>
           <span className="pill">
-            {mode === "demo" ? "演示环境" : mode === "local" ? "本地接入" : "内网环境"}
+            {mode === "demo" ? "演示环境" : mode === "local" ? "本地接入" : "正式环境"}
           </span>
         </header>
         {mode === "demo" && (

@@ -2,9 +2,10 @@
 
 ## 演示 / 生产
 
-演示使用随机密码账号与 SQLite；生产必须设置：
+正式初始化流程见 [正式环境初始化](正式环境初始化.md)。正式 SQLite 使用 review.db，原始上传文件使用 data/review_files；演示仅通过 setup.py --demo 显式启用。正式环境必须配置真实接入模块，数据库支持 SQLite 或 PostgreSQL：
 APP_MODE=production
-DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DATABASE
+DATABASE_URL=sqlite:///D:/Projects/ai_review_unit_test/data/review.db
+# 或 postgresql+psycopg://USER:PASSWORD@HOST/DATABASE
 SECRET_KEY=至少32个随机字符
 LOCAL_AUTH_MODULE=local_adapters.login_adapter
 LOCAL_REVIEW_MODULE=local_adapters.review_rules
@@ -13,8 +14,8 @@ ATTACHMENT_HOSTS=内网图片主机名
 
 AI_MODEL 用于记录审查模型标识；AI_BASE_URL、AI_API_KEY 由本地审查实现按需使用，公共层不直接请求模型。
 
-在 PostgreSQL 创建数据库和专用账号，授予首次建表权限。执行一次 init 后，API/Worker 使用仅允许业务表所需读写的运行账号。
-审计表 audit 应在数据库权限层禁止运行账号 UPDATE/DELETE，以加强追加记录约束。
+若使用 PostgreSQL，先创建数据库和专用账号，授予首次建表权限。执行一次 init 后，API/Worker 使用仅允许业务表所需读写的运行账号。
+若配置审计表追加写权限，需要为历史清理提供单独维护账号。
 第一版通过 create_all 初始化 v1；未来结构变更需配套迁移，create_all 不用于升级旧表。
 表格审查版提供增量升级：停止 API/Worker 后，用项目虚拟环境执行 `python scripts/run.py migrate`，
 补建 item_notes 和 result_measurements 两张表，保留现有数据；可重复执行。Windows 一键脚本自动执行此步骤。
@@ -24,7 +25,7 @@ AI_MODEL 用于记录审查模型标识；AI_BASE_URL、AI_API_KEY 由本地审�
 
 生产环境同目录共享 .env、data、数据库配置。原始 Excel 文件留在服务端磁盘，不随意清理。
 Windows 通过 NTFS ACL 仅向服务账号开放 .env、data；Linux .env 权限 600，data 目录 700。
-数据备份同时包含 PostgreSQL 与 data 原始文件，定期验证恢复。磁盘或数据库备份可包含敏感报告，遵循内网管理要求。
+数据备份同时包含业务数据库与 data 原始文件，定期验证恢复。磁盘或数据库备份可包含敏感报告，遵循内网管理要求。
 所有 Worker 使用同一发布版本与集成配置。默认一个 Worker，可增加进程以同时审查不同报告；同一报告串行审查。
 任务租约过期后恢复，外部 AI 为至少一次调用；租约必须长于集成单项处理时间。
 一次任务存在多个项目错误时其余项目继续，最终 partial_failed；修复接口后用户可新建批次，旧批次不变。

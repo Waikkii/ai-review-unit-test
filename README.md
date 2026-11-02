@@ -20,11 +20,25 @@ React + TypeScript / FastAPI / SQLAlchemy / PostgreSQL / 独立 Python Worker。
 - 操作记录默认只展示报告上传、发起 AI 审查、下载/导出及关键词申请，显示用户名和中文操作；完整审计数据保留。
 - 关键词业务结构为 a～e 五个 TEXT 字段，a～d（测试对象、用例编号、用例名称、测试小项）全库联合唯一，e 为单个关键词；按四字段精确匹配。普通用户新增/修改/删除需审批，管理员直接生效，版本冲突保护与软删除。
 - 原始 Excel 下载；导出保留原始 Sheet 并新增该批次全部审查字段和结论 Sheet。
-- 上传、登录、修订、发起审查、逐项结果、审批、关键词生效、权限、下载与导出均记录审计。
+- 保留报告上传、审查发起及完成、审批、关键词生效、权限、下载与导出等关键操作记录，逐项结果不重复写操作日志。
 
-## 本地演示
+## 正式环境首次初始化
 
-需要 Python 3.11+、Node.js 20.19+ 或 22.12+。数据库演示可用 SQLite，正式部署使用 PostgreSQL。
+从你本机的 A/B/C/D 联合键关键词 test.db 初始化新业务库 `data/review.db`，不复制旧历史：
+
+```powershell
+.venv\Scripts\python scripts/setup.py --source "D:\你的目录\test.db"
+# 确认预览正确，先停止服务，再执行：
+.venv\Scripts\python scripts/setup.py --source "D:\你的目录\test.db" --admin-user "你的内网用户名" --apply
+```
+
+关键词列支持 I 或 valve，可通过 --table 和 --keyword-column 指定。脚本备份并更新 .env，设置 APP_MODE=production，保留模型和令牌配置；拒绝覆盖已有业务库。填写本机真实接入函数后重建启动，页面显示“正式环境”。日常启动不会重新初始化。
+
+完整步骤见 [正式环境初始化](docs/正式环境初始化.md)。
+
+## 显式演示环境
+
+需要 Python 3.11+、Node.js 20.19+ 或 22.12+。演示和正式部署均支持 SQLite；也可配置 PostgreSQL。
 
 在根目录创建环境并安装后端：
 
@@ -32,14 +46,14 @@ React + TypeScript / FastAPI / SQLAlchemy / PostgreSQL / 独立 Python Worker。
 python -m venv .venv
 # Windows:
 .venv\Scripts\python -m pip install -r backend/requirements-dev.txt
-.venv\Scripts\python scripts/setup.py
+.venv\Scripts\python scripts/setup.py --demo
 .venv\Scripts\python scripts/run.py init
 .venv\Scripts\python scripts/sample_excel.py
 
 # Linux 对应使用 .venv/bin/python
 ```
 
-scripts/setup.py 生成未纳入 Git 的 .env，演示账号 demo、admin，随机密码见 DEMO_PASSWORD。
+scripts/setup.py --demo 显式生成未纳入 Git 的 .env，演示账号 demo、admin，随机密码见 DEMO_PASSWORD。
 
 ### Windows 一键启动
 
@@ -82,14 +96,14 @@ pnpm run build
 实际内网接入文件放在本机 `backend/local_adapters/`，整个目录通过 `.gitignore` 排除，不上传 GitHub。
 本机目录内的说明列出登录、Cookie 下载和审查函数接口；填写完成后在本机 `.env` 配置
 `APP_MODE=local`、`LOCAL_AUTH_MODULE=local_adapters.login_adapter`、`LOCAL_REVIEW_MODULE=local_adapters.review_rules`
-及 `ATTACHMENT_HOSTS`。local 模式可用 SQLite，production 仍要求 PostgreSQL。
+及 `ATTACHMENT_HOSTS`。正式接入推荐 APP_MODE=production，支持 SQLite review.db 或 PostgreSQL。
 Cookie 失效后仅自动重登并重试一次；仍失败时停止整批审查，页面弹窗提示联系管理员。
 凭据和 Cookie 使用 SECRET_KEY 派生密钥加密，默认 8 小时未更新后过期，退出登录/停用账号会移除。
 不得将 SECRET_KEY 或本地接入目录强制加入 Git。
 
 参考 [接入说明](docs/integration.md) 和 [部署说明](docs/deployment.md)。
 正式接入需要脱敏 Excel 样例、关键词库结构、内网认证接口、现有凭证下载代码、审查规则及支持图片的 AI 模型。
-APP_MODE=production 启动必须使用 PostgreSQL 并配置自定义集成模块；不回退到演示登录。
+APP_MODE=production 必须配置本地登录与审查模块，不回退到演示登录；正式 SQLite 数据库使用 review.db。
 
 ## 验证
 
@@ -100,7 +114,7 @@ pnpm run build
 ```
 
 测试覆盖越权、管理员只读、修订冲突、快照、审批冲突、即时停用、任务租约恢复、并发领取、导出与链接白名单。
-SQLite 用于快速自动化测试；PostgreSQL 并发和真实内网接口、实际 1500 行/30 人负载仍需目标环境验证。
+SQLite 可用于正式单 Worker 部署和自动化测试；SQLite/PostgreSQL 并发、真实内网接口及实际 1500 行/30 人负载仍需在目标环境验证。
 
 已有安装升级到表格审查版：Windows 使用 `rebuild-start.cmd` 自动补建新表；手动启动或 Linux 部署前执行
 `python scripts/run.py migrate`（使用项目虚拟环境）。升级仅新增表，不重写历史报告或 AI 结果。
