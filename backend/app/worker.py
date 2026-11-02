@@ -75,7 +75,7 @@ def process_once():
             item_revision = work.item_revision if work else 1
         auth_failed = False
         try:
-            current_model = "demo" if settings.app_mode == "demo" else settings.ai_model
+            current_model = "demo" if settings.app_mode == "demo" else settings.review_model
             if (run.mode, run.model, run.rule_version) != (settings.app_mode, current_model, rule_version()):
                 raise RuntimeError("任务模式、模型或规则版本与 Worker 不一致")
             verdict, raw = review(fields, keywords, username)

@@ -28,7 +28,7 @@ def test_notes_owner_permissions_conflicts_and_original_fields(client, headers):
     assert updated["version"] == item["version"]
     assert client.patch(endpoint, headers=h, json={"note": "", "version": 1}).json()["version"] == 2
     assert client.get(path, headers=h).json()[0]["note"] == ""
-    assert any(a["action"] == "item.note" for a in client.get("/api/audit?summary=false", headers=h).json())
+    assert not any(a["action"] == "item.note" for a in client.get("/api/audit?summary=false", headers=h).json())
 
 
 def test_progress_measurements_notes_filters_and_export(client, headers, monkeypatch):

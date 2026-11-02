@@ -14,7 +14,10 @@ AUTH_FAILURE_MESSAGE = "图片访问认证失败，自动重新登录或重试�
 
 
 class CookieExpired(Exception):
-    """Local download adapter raises this for expired cookies (401/403/login page)."""
+    """Signal an expired login session; request/relogin logic lives in the wrapper."""
+
+    def __init__(self, message="登录状态已失效"):
+        super().__init__(message)
 
 
 class SessionAuthFailure(Exception):
@@ -65,11 +68,21 @@ def _decode(encrypted):
         raise SessionAuthFailure() from None
 
 
-def download_with_session(url, username):
+def _request_images(module, url, cookies):
+    try:
+        return module.fetchimage(url, cookies)
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        if isinstance(exc, CookieExpired) or getattr(response, "status_code", None) in {401, 403}:
+            raise CookieExpired() from None
+        raise
+
+
+def download_with_session(url: str, username: str) -> list[tuple[bytes, str]]:
     module = importlib.import_module(settings.local_auth_module)
     payload, version = _load(username)
     try:
-        return module.fetchimage(url, payload["cookies"])
+        return _request_images(module, url, payload["cookies"])
     except CookieExpired:
         pass
     try:
@@ -91,6 +104,6 @@ def download_with_session(url, username):
                 record.encrypted = _cipher().encrypt(json.dumps(payload).encode()).decode()
                 record.version, record.updated_at = record.version + 1, now()
             db.commit()
-        return module.fetchimage(url, payload["cookies"])
+        return _request_images(module, url, payload["cookies"])
     except Exception:
         raise SessionAuthFailure() from None

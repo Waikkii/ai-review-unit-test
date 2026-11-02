@@ -40,7 +40,7 @@ def create_run(db, report, actor, selection_mode):
     snapshots = [keyword_dict(k) for k in db.scalars(select(Keyword).where(Keyword.deleted.is_(False)))]
     run = Run(id=uid(), report_id=report.id, actor_id=actor.id, revision=report.revision,
               total=len(chosen), keyword_snapshot=snapshots, completed=0, failed=0,
-              model="demo" if settings.app_mode == "demo" else settings.ai_model,
+              model="demo" if settings.app_mode == "demo" else settings.review_model,
               rule_version=rule_version(), mode=settings.app_mode)
     db.add(run)
     db.flush()
@@ -57,7 +57,8 @@ def create_run(db, report, actor, selection_mode):
         db.flush()
         db.add(ResultWork(result_id=result.id, item_revision=state.revision))
     audit(db, actor, "run.start", run.id, after={"report_id": report.id, "selection_mode": selection_mode,
-          "revision": run.revision, "model": run.model, "rule_version": run.rule_version, "keywords": snapshots})
+          "revision": run.revision, "model": run.model, "rule_version": run.rule_version,
+          "filename": report.filename})
     return run
 
 

@@ -725,6 +725,17 @@ function App() {
                         <p>{selected.item_count} 个测试项</p>
                       </div>
                       <div className="actions">
+                        {selected.owner_id === user.id && <button disabled={busy}
+                          onClick={() => {
+                            const report = selected;
+                            if (!window.confirm(`清除“${report.filename}”的历史？将永久删除该报告、原始 Excel、全部审查批次、结果和备注。关键词及审批记录会保留。此操作无法撤销。`)) return;
+                            void act(async () => {
+                              const response = await api<{ warning: string }>("/reports/" + report.id, { method: "DELETE" });
+                              setSelected(null); setRun(null); setRuns([]); setItems([]); setResults([]);
+                              await loadReports();
+                              setNotice(response.warning || "已清除该报告及全部审查历史");
+                            });
+                          }}>清除历史</button>}
                         <button
                           disabled={busy}
                           onClick={() =>

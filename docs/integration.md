@@ -1,50 +1,16 @@
-# 内网集成契约
+# 内网接入契约
 
-优先使用本机被 Git 忽略的 local_adapters 目录（后文“内网接入”）；以下 INTEGRATION_MODULE 契约兼容旧适配器。
+登录和审查统一由被 Git 忽略的 backend/local_adapters 目录提供。
 
-1. authenticate(username, password) -> {"username": "经过认证的稳定账号标识"}
-   向内网鉴权接口验证。旧适配器仅在此次调用中使用密码；新内网接入由公共层加密临时保存，禁止明文持久化或记日志。
-   如果下载需要登录态，在集成方安全凭据库中按稳定 username 管理；多进程间可共享，过期后明确失败。
-   系统角色由本地 users 表控制，内网接口或前端返回的 role 不会作为系统管理员依据。
-   BOOTSTRAP_ADMINS 是首次注册的管理员白名单；后续修改由管理员权限页进行。
-
-2. download_attachment(url, username) -> (bytes, MIME)
-   把现有 Python 凭证下载代码接入。API/Worker 是不同进程，不能仅在登录进程内存缓存凭据。
-   ATTACHMENT_HOSTS 显式填写内网主机名列表（逗号分隔），包含端口时仍匹配 hostname。
-   下载实现必须禁止重定向、每张超时最多 10 秒、最多 10 MiB，不能访问任意 URL。
-   用户凭据不得用于 AI 请求，也不得把附件 URL/凭据传给 AI。最多 10 张附件。
-   验证图片 MIME 和签名，当前支持 JPEG/PNG；其他格式待明确需求后扩展。
-   系统只保存原始报告和 AI 返回，图片当前不持久化；如果图片地址内容可能变化，正式验收应增加受控归档。
-
-3. RULE_VERSION = "corp-rules-v1"
-   规则发生变化必须改变该值；运行时禁止滚动混用多个不同规则版本 Worker。
-   当前版本需在队列任务清空后统一发布；任务中记录提交时规则版本供追溯。
-   Worker 会拒绝执行与自身模式、模型或规则版本不匹配的任务，并保留错误记录，避免静默混用。
-
-4. build_messages(fields, keywords, images) -> OpenAI messages
-   fields 是批次中的原始字段快照（新模板包含测试对象；旧 11 字段报告仍可读取），keywords 是匹配的对象列表：
-   [{id, domain, key, payload, version, deleted}]。
-   新关键词 payload 为 {a,b,c,d,e}，均为字符串；a=测试对象、b=用例编号、c=用例名称、d=测试小项、e=单个关键词。
-   a～d 全库唯一，无领域列；Worker 仅将四字段逐字相等的记录传入，不 trim、不模糊匹配、不拆分 e。
-   新关键词内部 domain 为保留标识，key 由 a～d 的 JSON 数组计算 SHA-256；集成规则不应依赖其值。
-   未命中时 keywords=[]，由正式审查规则决定是否需要人工确认，不自动判为通过。
-   兼容旧演示领域 JSON 关键词和历史快照；旧关键词仍按领域筛选，新数据应使用五列接口。
-   images 是 [{"url":"data:image/jpeg;base64,..."}]。
-   筛选依据为“测试详情”中的“值”非空，与附件是否存在无关。
-   附件为空时 images=[]，build_messages 必须支持纯文字审查。
-   附件有占位文本但无 HTTP(S) 地址时，上传保留原文，正式审查计为 error，不能当作无附件或通过。
-   自行实现真实审查规则，将图片内容作为 image_url 块传入支持视觉的模型。
-   将报告、图片、关键词作为数据处理；不要允许其覆盖 system 指令。
-   模型 JSON 返回：
-   {"status":"passed|failed|needs_review","explanation":"说明","evidence":["依据"],"suggestion":"建议","ai_threshold":"识别出的门限","ai_value":"识别出的值"}
-   ai_threshold、ai_value 为字符串，必须来自真实审查输入；未识别时返回空字符串，不复制原始字段冒充识别结果。
-   为兼容已有适配器，这两个字段缺省为空；演示模式不生成测量值。
-   缺失字段、未知状态、非 JSON、下载失败均计为 error，不会当作通过。
-
-AI_BASE_URL 是已含 /v1 的内网根地址，程序追加 /chat/completions。
-配置 AI_MODEL、AI_API_KEY。超时 90 秒，不跟随重定向，不读取系统代理。
-适配器耗时总计必须小于 LEASE_SECONDS（默认 300 秒），数据库网络必须位于可信内网。
-Worker 恢复可能再次调用模型，保证结果只提交一次，不保证外部请求仅调用一次。
+- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password) 返回 {username, cookies}；fetchimage(url, cookies) 返回 [(bytes, MIME), ...]。
+- LOCAL_REVIEW_MODULE=local_adapters.review_rules：review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage) 返回 (ai_threshold, ai_value, result) 三个字符串，并提供 RULE_VERSION。兼容旧版 (verdict, raw) 返回格式。
+- attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[bytes, str]]]。
+- 系统先按测试对象、用例编号、用例名称、测试小项匹配 a～d，将 e 列的单个关键词传入。无关键词直接返回“缺少关键词”。
+- ATTACHMENT_HOSTS 为附件入口主机名白名单，逗号分隔。图片支持 JPEG/PNG，每次最多 10 张，每张最多 10 MiB。
+- verdict 包含 status（passed/failed/needs_review）、explanation、evidence、suggestion、ai_threshold、ai_value；raw 为可 JSON 序列化的 dict。
+- 规则变化时更新 RULE_VERSION，统一重启 API/Worker；整项执行时间应小于 LEASE_SECONDS（默认 300 秒）。
+- AI 请求由本地 review_item 实现；本机 `.env` 可配置 `MODEL` 和 `APPLY_TOKEN`，在函数中通过 `from app.config import settings` 读取 `settings.model`、`settings.apply_token`。令牌由本地函数按实际接口要求使用，框架不会自动添加请求头。`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 继续兼容，审查记录优先使用 `MODEL`，为空时使用 `AI_MODEL`。修改配置后需重启 API 和 Worker。
+- 旧适配器及其配置已移除，真实接入统一使用上述模块；原始模型结果、任务快照和至少一次调用语义保留。
 
 已有 SQLite 关键词库结构已确认：a、b、c、d、e 均为 TEXT，PRIMARY KEY (a,b,c,d)，e 只有一个关键词。
 尚未导入真实数据库；后续提供数据库文件或读取接口及表名后，通过以下接口提交映射记录。
@@ -79,13 +45,16 @@ PATCH /api/items/{id}/note：{note, version}，首次 version=0，后续使用 n
 ## 内网接入与自动刷新
 
 本地文件不纳入 Git：login_adapter.py 提供 login(username, password) 和 fetchimage(url, cookies)；
-review_rules.py 提供 RULE_VERSION 和 review_item(unit, keyword, attachment_urls, fetchimage)。
-每条测试项先由系统读取单位、按 a～d 查询匹配关键词并取 e 字符串、解析附件地址，再调用该函数。
+review_rules.py 提供 RULE_VERSION 和 review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage)。
+每条测试项先由系统读取单位、按 a～d 匹配关键词并取 e 字符串、读取附件入口字符串，再调用该函数。
 未匹配到关键词或 e 为空时，系统直接返回 missing_keyword（缺少关键词），不调用审查函数、不请求图片/模型。
-该结果保留待审查资格，补齐关键词后可补审。无附件传 []；图片不预先下载，由审查函数内部调用系统传入的 fetchimage(url)。
+该结果保留待审查资格，补齐关键词后可补审。无附件传空字符串；图片不预先下载，由审查函数内部调用系统传入的 fetchimage(url)。
 该回调已绑定当前登录用户，内部调用 login_adapter.fetchimage(url, cookies)，并负责认证重试和图片校验。
+两层 fetchimage 均返回 list[tuple[bytes, str]]，每项是一张图片的 bytes 和 MIME；允许空列表，最多 10 张，每张最多 10 MiB。
+对应 Callable[[str], list[tuple[bytes, str]]]。一个附件入口可返回多张图片，系统不拆分 attachment_url 字符串。
 login 返回 {username, cookies}，cookies 为可序列化的 dict/list；fetchimage 在 Cookie 失效时抛 CookieExpired。
 公共层用当前用户的 Cookie 获取图片，遇 CookieExpired 自动重新登录一次并重试一次。
+CookieExpired 是会话失效信号，不负责 HTTP 请求；带 response.status_code=401/403 的 HTTP 异常也会识别为失效。
 仍失败则批次进入 blocked，保留后续 pending，不再领取该批次；API 返回 auth_session_failed，前端显示联系管理员弹窗。
 不将密码、Cookie、内网 API 错误响应或原始异常文本发往浏览器、模型或日志。
 重新登录后用户可继续；继续会重试认证失败的当前项，而非跳过它。
@@ -111,3 +80,7 @@ GET /api/reports/{id}/domains 返回整份报告的领域；items 和 run result
 GET /api/audit 默认只返回 report.upload、run.start、report.download、run.export、keyword.request，过滤在分页之前执行。
 返回 actor_username（用户名）、action_label（中文操作）、category 和 target_label（报告名/关键词对象），工作台不展示技术 ID 或原始 JSON。
 登录、逐项审查等详细留痕仍在数据库保留；排障可使用 summary=false，普通用户仍只能访问本人记录。
+
+### 扩展审查参数与三值返回
+
+criterion、threshold、value 分别取 Excel 当前测试项的“判据门限”“门限”“值”，均保持字符串，空字段为 ""，零值为 "0"。返回示例：`return "10", "8.5", "通过"`。结果支持“通过”“不通过”“待人工确认”或 passed/failed/needs_review；未知或空结果按接口格式错误处理，不自动判为通过。AI 门限和值写入审查结果列，原始 Excel 字段保持不变。fetchimage 仍是绑定当前用户的多图下载回调，类型不变。

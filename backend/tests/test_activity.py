@@ -30,7 +30,9 @@ def test_activity_feed_is_concise_named_and_paginated_before_display(client, hea
     page_two = client.get("/api/audit?limit=2&offset=2", headers=admin).json()
     assert len(page_one) == len(page_two) == 2
     assert not ({r["id"] for r in page_one} & {r["id"] for r in page_two})
-    assert len(client.get("/api/audit?summary=false&limit=200", headers=admin).json()) > 40
+    all_rows = client.get("/api/audit?summary=false&limit=200", headers=admin).json()
+    assert not any(r["action"] in {"item.reviewed", "session.login"} for r in all_rows)
+    assert all("keywords" not in r["after"] for r in all_rows if r["action"] == "run.start")
     upload(client, admin)
     assert len(client.get("/api/audit", headers=admin).json()) == 6
     own = client.get("/api/audit", headers=user).json()

@@ -5,6 +5,7 @@ SUMMARY_ACTIONS = {
     "report.download": ("下载原始报告", "download"),
     "run.export": ("导出审查结果", "download"),
     "keyword.request": ("提交关键词变更", "keyword"),
+    "report.clear": ("清除报告历史", "report"),
 }
 
 

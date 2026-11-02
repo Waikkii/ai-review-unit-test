@@ -28,7 +28,7 @@ def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=Fa
             raise CookieExpired()
         if fail_retry:
             raise RuntimeError("do-not-expose-cookie")
-        return b"\xff\xd8\xfftest-jpeg", "image/jpeg"
+        return [(b"\xff\xd8\xfftest-jpeg", "image/jpeg")]
 
     module.login, module.fetchimage = login, fetch
     monkeypatch.setitem(sys.modules, module.__name__, module)
@@ -43,7 +43,7 @@ def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=Fa
 def test_cookies_reused_or_refreshed_once_and_only_encrypted_at_rest(client, monkeypatch, initial_valid):
     calls = adapter(monkeypatch, initial_valid=initial_valid)
     result = download_with_session("http://intranet.example/a.jpg", "demo")
-    assert result[1] == "image/jpeg"
+    assert result[0][1] == "image/jpeg"
     assert len(calls["fetch"]) == (1 if initial_valid else 2)
     assert calls["login"] == ([] if initial_valid else [("original-login-name", "password-secret-123")])
     with Session() as db:
@@ -74,9 +74,8 @@ def test_real_download_retry_failure_blocks_batch_and_preserves_pending_rows(cli
     calls = adapter(monkeypatch, fail_retry=True)
     rules = types.ModuleType("fake_local_review")
     rules.RULE_VERSION = "test-rules-v1"
-    def review_item(unit, keyword, urls, fetchimage):
-        for url in urls:
-            fetchimage(url)
+    def review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage):
+        fetchimage(attachment_url)
         raise AssertionError("must not reach model")
     rules.review_item = review_item
     monkeypatch.setitem(sys.modules, rules.__name__, rules)
@@ -127,5 +126,5 @@ def test_concurrent_expiry_refreshes_once_and_shares_new_cookie(client, monkeypa
     module.fetchimage = fetch
     with ThreadPoolExecutor(max_workers=2) as pool:
         values = list(pool.map(lambda index: download_with_session(f"http://intranet.example/{index}.jpg", "demo"), [1, 2]))
-    assert all(value[1] == "image/jpeg" for value in values)
+    assert all(value[0][1] == "image/jpeg" for value in values)
     assert len(calls["login"]) == 1

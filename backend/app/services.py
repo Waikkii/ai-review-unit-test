@@ -2,7 +2,18 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from .models import Report, Run, Keyword, Audit
 
+RECORDED_ACTIONS = {
+    "report.upload", "report.download", "report.clear", "run.start", "run.finished", "run.export",
+    "keyword.request", "keyword.decision", "keyword.create", "keyword.update", "keyword.delete",
+    "user.permissions",
+}
+
+
 def audit(db, actor, action, object_id, before=None, after=None, reason=""):
+    if action not in RECORDED_ACTIONS:
+        return
+    if action == "run.start" and after:
+        after = {key: value for key, value in after.items() if key != "keywords"}
     db.add(Audit(actor_id=actor.id if hasattr(actor, "id") else actor,
                  action=action, object_id=object_id, before=before or {}, after=after or {}, reason=reason))
 

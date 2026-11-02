@@ -6,12 +6,12 @@
 APP_MODE=production
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DATABASE
 SECRET_KEY=至少32个随机字符
-INTEGRATION_MODULE=corp.adapters
+LOCAL_AUTH_MODULE=local_adapters.login_adapter
+LOCAL_REVIEW_MODULE=local_adapters.review_rules
 BOOTSTRAP_ADMINS=首次管理员的内网账号
-AI_BASE_URL=http://内网模型地址/v1
-AI_MODEL=视觉模型名
-AI_API_KEY=内网密钥
 ATTACHMENT_HOSTS=内网图片主机名
+
+AI_MODEL 用于记录审查模型标识；AI_BASE_URL、AI_API_KEY 由本地审查实现按需使用，公共层不直接请求模型。
 
 在 PostgreSQL 创建数据库和专用账号，授予首次建表权限。执行一次 init 后，API/Worker 使用仅允许业务表所需读写的运行账号。
 审计表 audit 应在数据库权限层禁止运行账号 UPDATE/DELETE，以加强追加记录约束。

@@ -133,6 +133,35 @@ def upload(file: UploadFile = File(...), user=Depends(current_user), db=Depends(
         raise
     return report_json(report)
 
+@app.delete("/api/reports/{report_id}")
+def clear_report(report_id: str, user=Depends(current_user), db=Depends(get_db)):
+    report = visible_report(db, report_id, user, write=True)
+    lock_report(db, report)
+    if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(ACTIVE_STATES))):
+        raise HTTPException(409, "报告仍有运行中或暂停中的审查，不能清除历史")
+    item_ids = select(Item.id).where(Item.report_id == report.id)
+    run_ids = select(Run.id).where(Run.report_id == report.id)
+    result_ids = select(Result.id).where(Result.run_id.in_(run_ids))
+    # 保留关键词申请，解除到即将删除的结果的关联。
+    db.execute(update(ChangeRequest).where(ChangeRequest.result_id.in_(result_ids)).values(result_id=None))
+    db.execute(delete(ItemReviewState).where(ItemReviewState.item_id.in_(item_ids)))
+    for table in (ResultMeasurements, ResultWork):
+        db.execute(delete(table).where(table.result_id.in_(result_ids)))
+    db.execute(delete(Result).where(Result.run_id.in_(run_ids)))
+    db.execute(delete(RunControl).where(RunControl.run_id.in_(run_ids)))
+    db.execute(delete(Run).where(Run.report_id == report.id))
+    db.execute(delete(ItemNote).where(ItemNote.item_id.in_(item_ids)))
+    db.execute(delete(Item).where(Item.report_id == report.id))
+    audit(db, user, "report.clear", report.id, after={"filename": report.filename})
+    db.delete(report)
+    db.commit()
+    warning = ""
+    try:
+        (settings.data_dir / (report_id + ".xlsx")).unlink(missing_ok=True)
+    except OSError:
+        warning = "历史已清除，但原始文件删除失败，请联系管理员处理"
+    return {"ok": True, "warning": warning}
+
 @app.get("/api/reports/{report_id}/items")
 def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
           domain: str | None = None,

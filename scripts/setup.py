@@ -11,7 +11,7 @@ database = (root / "data" / "demo.db").as_posix()
 env.write_text(
     "APP_MODE=demo\nSECRET_KEY=" + secrets.token_urlsafe(48) +
     "\nDEMO_PASSWORD=" + secrets.token_urlsafe(18) +
-    "\nDATABASE_URL=sqlite:///" + database + "\nBOOTSTRAP_ADMINS=\n",
+    "\nDATABASE_URL=sqlite:///" + database + "\nBOOTSTRAP_ADMINS=\nMODEL=\nAPPLY_TOKEN=\n",
     encoding="utf-8")
 try:
     env.chmod(0o600)

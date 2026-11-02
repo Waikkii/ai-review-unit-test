@@ -5,10 +5,6 @@ from openpyxl import load_workbook
 from .schemas import COLUMNS
 from .config import settings
 
-def attachment_urls(value):
-    # 文本支持多个 URL（逗号、空格、换行分隔），不执行 Excel 公式。
-    return re.findall(r"https?://[^\s<>\"，,;；]+", value, flags=re.I)
-
 def detail_header(sheet):
     """实际报告使用三行表头；无详情标题的单行演示模板单独识别。"""
     sections = [cell.row for row in sheet.iter_rows() for cell in row
