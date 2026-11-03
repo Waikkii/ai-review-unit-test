@@ -7,6 +7,7 @@ SUMMARY_ACTIONS = {
     "keyword.request": ("提交关键词变更", "keyword"),
     "report.clear": ("清除报告历史", "report"),
     "run.clear": ("删除审查批次", "review"),
+    "run.abort": ("中止审查", "review"),
     "item.review_state": ("修改审查状态", "review"),
 }
 

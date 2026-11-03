@@ -3,7 +3,7 @@ from sqlalchemy import select, update
 from .models import Report, Run, Keyword, Audit
 
 RECORDED_ACTIONS = {
-    "run.clear",
+    "run.clear", "run.abort",
     "report.upload", "report.download", "report.clear", "run.start", "run.finished", "run.export",
     "keyword.request", "keyword.decision", "keyword.create", "keyword.update", "keyword.delete",
     "user.permissions",

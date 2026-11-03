@@ -36,7 +36,7 @@ def reset_history(db, apply=False):
                       Run, ItemNote, ItemSource, Item, Report):
             db.execute(delete(model))
         db.execute(delete(Audit).where(Audit.action.in_(
-            {"report.upload", "report.download", "report.clear", "run.start", "run.finished", "run.export", "run.clear", "item.review_state"})))
+            {"report.upload", "report.download", "report.clear", "run.start", "run.finished", "run.export", "run.clear", "run.abort", "item.review_state"})))
     return counts
 
 

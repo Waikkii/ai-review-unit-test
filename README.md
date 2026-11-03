@@ -67,7 +67,7 @@ scripts/setup.py --demo 显式生成未纳入 Git 的 .env，演示账号 demo�
 如果更新修改了后端依赖，先运行 `.venv\Scripts\python -m pip install -r backend/requirements.lock.txt`。
 脚本不会重新生成 `.env` 或清空数据库；启动前自动升级辅助表、暂停约束及待审查状态。
 可用 PowerShell 查看状态：`powershell -NoProfile -File scripts/manage.ps1 -Action status`。
-默认仅本机访问；需要内网访问时使用 `start.cmd -BindAddress 你的内网IP`，重建时同样传给 `rebuild-start.cmd`。
+首次启动默认仅本机访问；双击根目录的 `start-lan.cmd` 可切换为局域网访问。脚本会重建并重启本项目服务，监听 `0.0.0.0:8000`，启动后列出可访问的内网地址，其他电脑使用 `http://服务器内网IP:8000`。也可运行 `start-lan.cmd -Port 8001` 指定端口。Windows 防火墙需允许对应 TCP 端口的局域网入站访问；脚本不会自动修改防火墙。启动器会记住监听地址，后续普通启动沿用上次地址。仍可使用 `start.cmd -BindAddress 你的内网IP` 显式指定单个地址，重建时同样传给 `rebuild-start.cmd`。
 成功启动后会在本地保存该地址，后续双击启动或重新构建会沿用；可再次传入 `-BindAddress` 更换地址。
 可通过 `-Port 其他端口` 指定端口，停止/查看状态时需指定相同端口；非默认端口的日志放在 `data/launcher/端口/`。
 

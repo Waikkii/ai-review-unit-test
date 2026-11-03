@@ -146,11 +146,12 @@ try {
             if ($listener) { throw "Port $Port is occupied. Stop the existing API before using this launcher." }
         }
         Start-ServiceProcess 'api' @('-m', 'uvicorn', 'app.main:app', '--host', $BindAddress, '--port', $Port.ToString())
+        $healthAddress = if ($BindAddress -eq '0.0.0.0') { '127.0.0.1' } else { $BindAddress }
         $ready = $false
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
             if (-not (Get-OwnedProcess $state['api'])) { break }
             try {
-                $health = Invoke-RestMethod "http://${BindAddress}:$Port/api/health" -TimeoutSec 1
+                $health = Invoke-RestMethod "http://${healthAddress}:$Port/api/health" -TimeoutSec 1
                 if ($health.status -eq 'ok') { $ready = $true; break }
             } catch { }
             Start-Sleep -Milliseconds 250
@@ -160,7 +161,18 @@ try {
         Start-Sleep -Seconds 1
         if (-not (Get-OwnedProcess $state['worker'])) { throw 'Worker startup failed. See data/launcher/worker.err.log.' }
         @{ address = $BindAddress } | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding UTF8
-        Write-Host "System running: http://${BindAddress}:$Port"
+        if ($BindAddress -eq '0.0.0.0') {
+            Write-Host "System running locally: http://127.0.0.1:$Port"
+            Write-Host 'LAN access URLs:'
+            $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.|0\.)' } |
+                Select-Object -ExpandProperty IPAddress -Unique)
+            foreach ($address in $addresses) { Write-Host "  http://${address}:$Port" }
+            if (-not $addresses.Count) { Write-Host "  http://<this computer's LAN IPv4>:$Port" }
+            Write-Host "If LAN access is blocked, allow TCP port $Port for your LAN in Windows Firewall."
+        } else {
+            Write-Host "System running: http://${BindAddress}:$Port"
+        }
         Write-Host 'API and Worker run in the background. Use stop.cmd to stop them.'
         Write-Host "Logs: $runtimeDir"
     }

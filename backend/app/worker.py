@@ -47,8 +47,14 @@ def process_once():
             return False
     while True:
         with Session() as db:
+            owned = db.execute(update(Run).where(Run.id == claimed, Run.lease_owner == owner,
+                Run.state.in_({"running", "pausing"})).values(
+                    lease_until=now() + timedelta(seconds=settings.lease_seconds)))
+            if owned.rowcount != 1:
+                db.rollback()
+                return True
             run = db.scalar(select(Run).where(Run.id == claimed).with_for_update())
-            if run.lease_owner != owner:
+            if run is None or run.lease_owner != owner:
                 return True
             if run.state == "pausing":
                 pending = db.scalar(select(Result.id).where(Result.run_id == claimed, Result.status == "pending").limit(1))
@@ -60,8 +66,6 @@ def process_once():
                 return True
             if run.state != "running":
                 return True
-            run.lease_until = now() + timedelta(seconds=settings.lease_seconds)
-            db.commit()
             result = db.scalar(select(Result).outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
                                .where(Result.run_id == claimed, Result.status == "pending")
                                .order_by(Result.domain, Result.row_number, func.coalesce(ItemSource.group_index, 0), Result.id).limit(1))
@@ -74,6 +78,7 @@ def process_once():
             username = db.get(User, run.actor_id).username
             work = db.get(ResultWork, result.id)
             item_revision = work.item_revision if work else 1
+            db.commit()
         auth_failed = False
         try:
             current_model = "demo" if settings.app_mode == "demo" else settings.review_model
@@ -93,10 +98,19 @@ def process_once():
             log.warning("Review failed: result=%s type=%s", result_id, type(exc).__name__)
         with Session() as db:
             # 抢占后旧进程不可写入，即使外部调用延迟返回。
+            # SQLite 的 FOR UPDATE 不提供行锁：条件更新同时校验租约并取得写锁，
+            # 与中止/删除互斥，防止外部调用返回后复活已删除的批次或写入已中止的结果。
+            writable = db.execute(update(Run).where(Run.id == claimed, Run.lease_owner == owner,
+                Run.state.in_({"running", "pausing"})).values(lease_until=Run.lease_until))
+            if writable.rowcount != 1:
+                db.rollback()
+                return True
             locked = db.scalar(select(Run).where(Run.id == claimed).with_for_update())
-            if locked.lease_owner != owner or locked.state not in {"running", "pausing"}:
+            if locked is None or locked.lease_owner != owner or locked.state not in {"running", "pausing"}:
                 return True
             result = db.get(Result, result_id)
+            if result is None:
+                return True
             if result.status == "pending":
                 threshold = values.pop("ai_threshold", "")
                 measured = values.pop("ai_value", "")

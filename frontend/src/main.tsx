@@ -129,6 +129,7 @@ const labels: Record<string, string> = {
   pausing: "正在暂停",
   blocked: "审查已停止",
   cancelled: "已重新开始",
+  aborted: "已中止",
 };
 let token = ""; // 仅保存在当前页面内存，关闭/刷新后重新登录。
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -528,8 +529,8 @@ function App() {
     return () => { cancelled = true; };
   }, [selected?.id]);
   useEffect(() => {
-    if (run?.error_code === "auth_session_failed") setAuthAlert(run.error_message);
-  }, [run?.id, run?.error_code, run?.error_message]);
+    if (run?.state === "blocked" && run.error_code === "auth_session_failed") setAuthAlert(run.error_message);
+  }, [run?.id, run?.state, run?.error_code, run?.error_message]);
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
@@ -642,14 +643,17 @@ function App() {
     setResultPage(0);
     setFilter([]); setResultOptions([]);
   };
-  const controlRun = (operation: "pause" | "resume" | "restart") => act(async () => {
+  const controlRun = (operation: "pause" | "resume" | "restart" | "abort") => act(async () => {
     if (!run) return;
     const updated = await api<Run>(`/runs/${run.id}/${operation}`, {
       method: "POST", ...(operation === "restart" ? { body: json({ selection_mode: reviewMode }) } : {}),
     });
     if (operation === "restart") chooseRun(updated);
-    else setRun(updated);
-    setNotice(operation === "restart" ? `已按${updated.selection_mode === "missing" ? "查漏补缺" : "全量审查"}重新开始，旧批次保留。` : operation === "pause" ? "已请求暂停，将在当前项结束后生效。" : "已继续审查。");
+    else {
+      setRun(updated);
+      setRuns(previous => previous.map(history => history.id === updated.id ? updated : history));
+    }
+    setNotice(operation === "abort" ? "审查已中止，可删除该批次历史。" : operation === "restart" ? `已按${updated.selection_mode === "missing" ? "查漏补缺" : "全量审查"}重新开始，旧批次保留。` : operation === "pause" ? "已请求暂停，将在当前项结束后生效。" : "已继续审查。");
   });
   const kwFrom = (k: Keyword) => {
     setEntry(Object.fromEntries(Object.keys(keywordFields).map(key => [key, String(k.payload[key] ?? "")])));
@@ -1036,6 +1040,8 @@ function App() {
                             {["queued", "running", "pausing"].includes(run.state) && <button disabled={busy || run.state === "pausing"}
                               onClick={() => void controlRun("pause")}>{run.state === "pausing" ? "正在暂停…" : "暂停"}</button>}
                             {["paused", "blocked"].includes(run.state) && <button disabled={busy} onClick={() => void controlRun("resume")}>继续</button>}
+                            {["queued", "running", "pausing", "paused", "blocked"].includes(run.state) && <button disabled={busy}
+                              aria-label="中止审查" onClick={() => void controlRun("abort")}>中止</button>}
                             <button disabled={busy} onClick={() => void controlRun("restart")}>重新开始（{reviewMode === "missing" ? "查漏补缺" : "全量"}）</button>
                           </>}
                           <button disabled={["queued", "running", "pausing", "paused"].includes(run.state) || busy}

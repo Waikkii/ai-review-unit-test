@@ -285,13 +285,21 @@ def start_run(report_id: str, data: StartReview | None = None, user=Depends(curr
 @app.post("/api/runs/{run_id}/{operation}")
 def control_run(run_id: str, operation: str, data: StartReview | None = None,
                 user=Depends(current_user), db=Depends(get_db)):
-    if operation not in {"pause", "resume", "restart"}:
+    if operation not in {"pause", "resume", "restart", "abort"}:
         raise HTTPException(404, "操作不存在")
     run = visible_run(db, run_id, user)
     report = visible_report(db, run.report_id, user, write=True)
     lock_report(db, report)
     run = db.scalar(select(Run).where(Run.id == run_id).with_for_update().execution_options(populate_existing=True))
-    if operation == "restart":
+    if run is None:
+        raise HTTPException(404, "审查批次不存在")
+    if operation == "abort":
+        if run.state == "aborted":
+            return run_json(run, db)
+        if run.state not in {*ACTIVE_STATES, "blocked"}:
+            raise HTTPException(409, "当前批次已结束，不能中止")
+        run.state, run.lease_owner, run.lease_until = "aborted", None, None
+    elif operation == "restart":
         control = db.get(RunControl, run.id)
         selection_mode = data.selection_mode if data else control.selection_mode if control else "full"
         # Fence the old worker before creating a new batch in the chosen mode.
