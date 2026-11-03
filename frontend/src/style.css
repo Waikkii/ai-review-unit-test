@@ -184,7 +184,16 @@ small {
 }
 .report-picker { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 260px; }
 .report-picker > span { white-space: nowrap; font-weight: 600; }
-.report-picker select { max-width: 540px; padding: 7px 10px; }
+.report-picker-menu { position: relative; flex: 1; max-width: 540px; min-width: 0; }
+.report-picker-trigger { display: flex; justify-content: space-between; gap: 12px; text-align: left; width: 100%; padding: 7px 10px; }
+.report-picker-options { position: absolute; top: calc(100% + 5px); left: 0; z-index: 45; width: 100%; max-height: 350px; overflow: auto; padding: 5px; border: 1px solid #d3e0df; border-radius: 8px; background: white; box-shadow: 0 8px 24px #18343820; }
+.report-option { display: flex; align-items: center; gap: 5px; padding: 2px; border-radius: 5px; }
+.report-option.selected { background: #edf6f2; }
+.report-option-select { display: grid; gap: 4px; flex: 1; min-width: 0; border: 0; background: transparent; text-align: left; padding: 7px; }
+.report-option-select span { overflow-wrap: anywhere; }
+.report-option-select small { color: #7b8c9b; font-size: 11px; }
+.delete-icon { flex: 0 0 26px; width: 26px; min-width: 26px; height: 26px; padding: 0; border-color: transparent; background: transparent; color: #8a7777; font-size: 18px; line-height: 1; }
+.delete-icon:hover:not(:disabled) { background: #fbeaea; border-color: #eccaca; color: #b84040; }
 .report-picker-meta { color: #7b8c9b; font-size: 12px; }
 .report-list .pager { margin: 0; }
 .report-list .pager button { padding: 5px 8px; }
@@ -284,6 +293,10 @@ small {
 .run-list button {
   font-size: 12px;
 }
+.run-chip { display: flex; align-items: center; border: 1px solid #d9e4e5; border-radius: 7px; padding-right: 4px; }
+.run-chip.selected { background: #edf6f2; border-color: #8eafa9; }
+.run-chip > button:first-child { border: 0; background: transparent; text-align: left; }
+.run-chip > .delete-icon { font-size: 18px; }
 .progress-head {
   margin-top: 24px;
 }

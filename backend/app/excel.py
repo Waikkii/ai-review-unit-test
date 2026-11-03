@@ -222,9 +222,15 @@ def export_excel(original, run, results, measurements=None, notes=None, sources=
     measurements, notes, sources = measurements or {}, notes or {}, sources or {}
     workbook = load_workbook(BytesIO(original), keep_links=False)
     try:
+        results = list(results)
+        domains = {result.domain for result in results}
+        missing = domains.difference(workbook.sheetnames)
+        if missing:
+            raise ValueError("原始 Excel 缺少审查结果对应的 Sheet：" + "、".join(sorted(missing)))
         outputs = {}
         for sheet in workbook:
-            if sheet.title.strip() in {"封面", "目录"} or not any(c.value is not None for row in sheet for c in row):
+            # 未进入该批次的 Sheet 保留原样，不要求空白/说明页具备详情表头。
+            if sheet.title not in domains:
                 continue
             layout = detail_header(sheet)
             outputs[sheet.title] = (layout, _add_review_area(sheet, layout))

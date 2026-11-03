@@ -26,6 +26,7 @@ type Run = {
   selection_mode: "full" | "missing";
   error_code: string;
   error_message: string;
+  created_at: string;
 };
 type Item = {
   id: string;
@@ -151,7 +152,12 @@ async function download(path: string, name: string) {
   const res = await fetch("/api" + path, {
     headers: { Authorization: "Bearer " + token },
   });
-  if (!res.ok) throw new Error("下载失败，请等待审查完成或重新登录");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    if (res.status === 401) window.dispatchEvent(new Event("session-expired"));
+    throw new Error(typeof body?.detail === "string" ? body.detail
+      : body?.detail ? JSON.stringify(body.detail) : `下载失败（HTTP ${res.status}），请联系管理员查看 API 日志`);
+  }
   const url = URL.createObjectURL(await res.blob());
   const a = document.createElement("a");
   a.href = url;
@@ -160,6 +166,13 @@ async function download(path: string, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 const json = (value: unknown) => JSON.stringify(value);
+const historyTime = (value: string) => {
+  if (!value) return "时间未知";
+  const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : value + "Z");
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+};
 const PAGE = 100;
 const keywordFields = { a: "测试对象", b: "用例编号", c: "用例名称", d: "测试小项", e: "关键词" };
 const entryDomain = "__five_column_keywords__";
@@ -220,6 +233,35 @@ function ColumnFilter({ label, options, value, onChange }: {
           onChange(choices.every(v => applied.includes(v)) ? undefined : applied); setOpen(false);
         }}>确定</button></div>
     </div>, document.body)}</>;
+}
+
+function ReportPicker({ reports, selected, user, busy, onSelect, onDelete }: {
+  reports: Report[]; selected: Report | null; user: User; busy: boolean;
+  onSelect: (report: Report) => void; onDelete: (report: Report) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", outside); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  return <div ref={root} className="report-picker-menu">
+    <button className="report-picker-trigger" aria-label="选择报告" aria-expanded={open} disabled={busy}
+      onClick={() => setOpen(!open)}>{selected?.filename || (reports.length ? "选择一份报告" : "暂无报告，请先上传")}<span>▾</span></button>
+    {open && <div className="report-picker-options" role="group" aria-label="已上传报告列表">
+      {reports.map(report => <div className={`report-option ${selected?.id === report.id ? "selected" : ""}`} key={report.id}>
+        <button className="report-option-select" aria-label={`选择报告：${report.filename}`} disabled={busy}
+          onClick={() => { onSelect(report); setOpen(false); }}><span>{report.filename}</span>
+          <small>{report.item_count} 项 · {historyTime(report.created_at)}</small></button>
+        {report.owner_id === user.id && <button className="delete-icon" aria-label={`删除报告：${report.filename}`}
+          title="删除报告及全部审查历史" disabled={busy} onClick={() => onDelete(report)}>×</button>}
+      </div>)}
+      {!reports.length && <p className="muted">暂无报告</p>}
+    </div>}
+  </div>;
 }
 
 function AttachmentLinks({ value }: { value: string }) {
@@ -570,6 +612,29 @@ function App() {
     setResultPage(0);
     setFilter([]);
   };
+  const deleteReport = (report: Report) => {
+    if (!window.confirm(`删除“${report.filename}”？将永久删除原始 Excel、全部审查批次、结果和备注。此操作无法撤销。`)) return;
+    void act(async () => {
+      const response = await api<{ warning: string }>(`/reports/${report.id}`, { method: "DELETE" });
+      if (selected?.id === report.id) {
+        setSelected(null); setRun(null); setRuns([]); setItems([]); setResults([]);
+      }
+      const remaining = await api<Report[]>(`/reports?limit=${PAGE}&offset=${reportPage * PAGE}`);
+      setReports(remaining);
+      if (!remaining.length && reportPage > 0) setReportPage(reportPage - 1);
+      setNotice(response.warning || "已删除报告及全部审查历史");
+    });
+  };
+  const deleteRun = (history: Run) => {
+    if (!window.confirm(`删除 ${historyTime(history.created_at)} 的审查批次？将永久删除该批次的结果，保留原始报告、用户备注和其他批次；当前引用此批次结果的测试项会恢复待审查。此操作无法撤销。`)) return;
+    void act(async () => {
+      await api(`/runs/${history.id}`, { method: "DELETE" });
+      setRuns(previous => previous.filter(r => r.id !== history.id));
+      if (run?.id === history.id) { setRun(null); setResults([]); setFilter([]); setResultOptions([]); setItemPage(0); }
+      setReviewRefresh(value => value + 1);
+      setNotice("已删除该审查批次及其结果");
+    });
+  };
   const chooseRun = (r: Run) => {
     setResults([]);
     setRun(r);
@@ -880,14 +945,10 @@ function App() {
             </section>
             <div className="workspace">
               <section className="card report-list">
-                <label className="report-picker">
+                <div className="report-picker">
                   <span>{user.role === "admin" ? "全部报告" : "我的报告"}</span>
-                  <select aria-label="选择报告" value={reports.some(r => r.id === selected?.id) ? selected!.id : ""}
-                    onChange={e => { const report = reports.find(r => r.id === e.target.value); if (report) chooseReport(report); }}>
-                    <option value="">{reports.length ? "选择一份报告" : "暂无报告，请先上传"}</option>
-                    {reports.map(r => <option key={r.id} value={r.id}>{r.filename} · {r.item_count} 项 · {new Date(r.created_at + "Z").toLocaleDateString()}</option>)}
-                  </select>
-                </label>
+                  <ReportPicker reports={reports} selected={selected} user={user} busy={busy} onSelect={chooseReport} onDelete={deleteReport} />
+                </div>
                 <span className="report-picker-meta">{selected ? `${selected.item_count} 个测试项 · 版本 ${selected.revision}` : ""}</span>
                 {pager(reportPage, setReportPage, reports.length)}
               </section>
@@ -904,17 +965,6 @@ function App() {
                         <p>{selected.item_count} 个测试项</p>
                       </div>
                       <div className="actions">
-                        {selected.owner_id === user.id && <button disabled={busy}
-                          onClick={() => {
-                            const report = selected;
-                            if (!window.confirm(`清除“${report.filename}”的历史？将永久删除该报告、原始 Excel、全部审查批次、结果和备注。关键词及审批记录会保留。此操作无法撤销。`)) return;
-                            void act(async () => {
-                              const response = await api<{ warning: string }>("/reports/" + report.id, { method: "DELETE" });
-                              setSelected(null); setRun(null); setRuns([]); setItems([]); setResults([]);
-                              await loadReports();
-                              setNotice(response.warning || "已清除该报告及全部审查历史");
-                            });
-                          }}>清除历史</button>}
                         <button
                           disabled={busy}
                           onClick={() =>
@@ -957,16 +1007,18 @@ function App() {
                     <details className="history-panel">
                     <summary>审查历史 <span>{runs.length} 个批次</span></summary>
                     <div className="run-list">
-                      {runs.map((r) => (
+                      {runs.map((r) => <div key={r.id} className={`run-chip ${run?.id === r.id ? "selected" : ""}`}>
                         <button
-                          key={r.id}
-                          className={run?.id === r.id ? "selected" : ""}
+                          disabled={busy}
                           onClick={() => chooseRun(r)}
                         >
-                          {r.id.slice(0, 8)} · {labels[r.state]} · {r.completed}
+                          {historyTime(r.created_at)} · {r.id.slice(0, 8)} · {labels[r.state]} · {r.completed}
                           /{r.total}
                         </button>
-                      ))}
+                        {selected.owner_id === user.id && <button className="delete-icon" aria-label={`删除审查批次：${r.id.slice(0, 8)}`}
+                          title="删除该审查批次" disabled={busy || runs.some(history => ["queued", "running", "pausing", "paused"].includes(history.state))}
+                          onClick={() => deleteRun(r)}>×</button>}
+                      </div>)}
                     </div>
                     </details>
                     {run && <>

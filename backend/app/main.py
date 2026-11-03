@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from hashlib import sha256
 import json
+import logging
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query
 from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,8 @@ from .audit_view import SUMMARY_ACTIONS, describe_activity
 from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, run_json as workflow_run_json
 from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE
 from .result_filters import effective_result_expressions
+
+log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app):
@@ -336,6 +339,28 @@ def run_detail(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     run = visible_run(db, run_id, user)
     return {**run_json(run, db), "keyword_snapshot": run.keyword_snapshot}
 
+
+@app.delete("/api/runs/{run_id}")
+def clear_run(run_id: str, user=Depends(current_user), db=Depends(get_db)):
+    run = visible_run(db, run_id, user)
+    report = visible_report(db, run.report_id, user, write=True)
+    lock_report(db, report)
+    if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(ACTIVE_STATES))):
+        raise HTTPException(409, "报告仍有运行中或暂停中的审查，请在审查结束后删除批次")
+    result_ids = select(Result.id).where(Result.run_id == run.id)
+    db.execute(update(ChangeRequest).where(ChangeRequest.result_id.in_(result_ids)).values(result_id=None))
+    # 删除当前引用的结论后恢复待审查；不改其他批次结论，也不猜测旧结果是否仍有效。
+    db.execute(update(ItemReviewState).where(ItemReviewState.source_result_id.in_(result_ids)).values(
+        source_result_id=None, reviewed_revision=0, revision=ItemReviewState.revision + 1))
+    for table in (ResultMeasurements, ResultWork):
+        db.execute(delete(table).where(table.result_id.in_(result_ids)))
+    db.execute(delete(Result).where(Result.run_id == run.id))
+    db.execute(delete(RunControl).where(RunControl.run_id == run.id))
+    audit(db, user, "run.clear", run.id, after={"filename": report.filename}, reason="删除审查历史批次")
+    db.delete(run)
+    db.commit()
+    return {"ok": True}
+
 @app.get("/api/runs/{run_id}/results")
 def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
             status: list[str] | None = Query(None), domain: list[str] | None = Query(None),
@@ -403,8 +428,18 @@ def export(run_id: str, user=Depends(current_user), db=Depends(get_db)):
         .where(Item.report_id == run.report_id))}
     sources = {s.item_id: s.group_index for s in db.scalars(select(ItemSource).join(Item)
         .where(Item.report_id == run.report_id))}
-    content = export_excel((settings.data_dir / (run.report_id + ".xlsx")).read_bytes(), run,
-                           result_rows, measurements, notes, sources)
+    try:
+        original = (settings.data_dir / (run.report_id + ".xlsx")).read_bytes()
+        content = export_excel(original, run, result_rows, measurements, notes, sources)
+    except FileNotFoundError:
+        log.exception("Excel export source missing: run=%s report=%s", run.id, run.report_id)
+        raise HTTPException(404, "原始 Excel 文件不存在，无法导出，请联系管理员恢复原文件")
+    except ValueError as exc:
+        log.exception("Excel export validation failed: run=%s report=%s", run.id, run.report_id)
+        raise HTTPException(422, f"Excel 导出失败：{exc}") from exc
+    except Exception as exc:
+        log.exception("Excel export failed: run=%s report=%s", run.id, run.report_id)
+        raise HTTPException(500, f"Excel 导出失败，请联系管理员查看 API 日志（批次：{run.id}）") from exc
     audit(db, user, "run.export", run.id)
     db.commit()
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
