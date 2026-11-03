@@ -232,8 +232,8 @@ const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable 
         if (e.key === "Escape" && !saving) { setDraft(saved); setEditing(false); }
       }} />
     <div className="note-actions">
-      <button disabled={saving} aria-label="保存备注" title="保存备注" onClick={() => void save(draft)}>✅</button>
-      <button disabled={saving} aria-label="清空备注" title="清空并保存备注" onClick={() => void save("")}>❌</button>
+      <button className="primary" disabled={saving} title="保存备注" onClick={() => void save(draft)}>确认</button>
+      <button disabled={saving} title="清空并保存备注" onClick={() => void save("")}>清除</button>
     </div>
     {error && <span role="alert" className="note-error">{error}</span>}
   </div>, document.body)}
@@ -300,6 +300,7 @@ function App() {
   const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
   const [keywordDialog, setKeywordDialog] = useState(false);
   const [reviewRefresh, setReviewRefresh] = useState(0);
+  const itemsQuery = useRef("");
   const keywordIndex = useMemo(() => new Map(keywords.filter(k => k.domain === entryDomain).map(k =>
     [keywordIdentity([k.payload.a, k.payload.b, k.payload.c, k.payload.d]), k])), [keywords]);
   useEffect(() => {
@@ -319,10 +320,10 @@ function App() {
     [decisionNote, setDecisionNote] = useState("");
   const [permission, setPermission] = useState<User | null>(null),
     [permissionReason, setPermissionReason] = useState("");
-  const act = async (fn: () => Promise<void>) => {
+  const act = async (fn: () => Promise<void>, quiet = false) => {
     setBusy(true);
     setError("");
-    setNotice("");
+    if (!quiet) setNotice("");
     try {
       await fn();
     } catch (e) {
@@ -383,7 +384,10 @@ function App() {
   useEffect(() => {
     if (!selected || tab !== "reports") return;
     let cancelled = false;
-    setItems([]);
+    // Background refreshes must keep the existing rows mounted and preserve scroll.
+    const query = json([selected.id, itemPage, domainFilter]);
+    if (itemsQuery.current !== query) setItems([]);
+    itemsQuery.current = query;
     api<Item[]>(
       "/reports/" +
         selected.id +
@@ -558,8 +562,7 @@ function App() {
     await api(`/items/${row.itemId}/review-state`, { method: "PATCH",
       body: json({ state, revision: row.reviewRevision, reviewed_revision: row.reviewedRevision }) });
     setReviewRefresh(value => value + 1);
-    setNotice(state === "pending" ? "已设为待审查，查漏补缺会包含此项" : "已设为已审查");
-  });
+  }, true);
   const tableRows: ReviewRow[] = run
     ? results.map(r => ({ itemId: r.item_id, domain: r.domain, fields: r.fields, note: r.note,
         pendingReview: r.pending_review ?? true, reviewRevision: r.review_revision ?? 1, reviewedRevision: r.reviewed_revision ?? 0,

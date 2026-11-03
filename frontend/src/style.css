@@ -412,8 +412,10 @@ dd {
 .verdict-button:hover { background: transparent; text-decoration: underline; }
 .note-display { width: 100%; height: 34px; overflow: hidden; border: 0; background: transparent; padding: 2px; text-align: left; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .note-popover { position: fixed; z-index: 50; width: 260px; max-width: calc(100vw - 16px); padding: 8px; display: flex; gap: 6px; align-items: flex-start; border: 1px solid #bdcecf; border-radius: 7px; background: #fff; box-shadow: 0 4px 12px #18343822; }
-.note-popover textarea { flex: 1; min-width: 0; resize: none; }
-.note-popover .note-actions button { margin: 0; padding: 3px; border: 0; }
+.note-popover { flex-direction: column; }
+.note-popover textarea { width: 100%; min-width: 0; resize: none; }
+.note-popover .note-actions { flex-direction: row; justify-content: flex-end; width: 100%; gap: 6px; }
+.note-popover .note-actions button { margin: 0; padding: 5px 12px; }
 .note-popover .note-error { position: absolute; top: 100%; left: 0; width: 100%; background: #fff; padding: 4px; border: 1px solid #e7b6ae; }
 .click-note-editor { position: relative; display: flex; align-items: flex-start; gap: 3px; }
 .click-note-editor textarea { min-width: 0; flex: 1; font-size: 11px; padding: 4px; }
