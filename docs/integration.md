@@ -94,6 +94,8 @@ criterion、threshold、value 分别取 Excel 当前测试项的“判据门限�
 `PATCH /api/items/{id}/review-state` 请求示例：`{"state":"reviewed","revision":2,"reviewed_revision":0}`。
 state 仅允许 pending/reviewed，对应待审查/已审查；revision 和 reviewed_revision 从 items 或 results 返回的 review_revision、reviewed_revision 读取。仅报告所有者可修改，管理员不能修改他人报告。活动审查期间禁止修改；版本冲突返回 409。手动状态只影响待审查资格，不改 AI 原始结果；设为待审查后会纳入查漏补缺。
 
-备注默认以文本显示，点击后编辑，✅保存，❌清空并保存；Escape 放弃本次未保存编辑。继续使用原 note_version 冲突校验。
+备注默认以文本显示，点击后通过浮动编辑框修改，不撑高表格行；✅保存，❌清空并保存；Escape 或点击外部放弃本次未保存编辑。继续使用原 note_version 冲突校验。
 
 报告表格最后一列展示当前关键词并提供编辑按钮，在当前页面弹窗修改；四个匹配字段只读，可编辑关键词和原因。复用 keyword-entry-requests：普通用户提交审批，管理员直接生效，生效后相关测试项恢复待审查。关键词管理页为上方编辑表单、下方逐行关键词表格，审批记录在其后。
+
+页面交互：待审查显示橙色，已审查显示绿色；关键词编辑图标位于关键词右侧。上传解析 Excel 时显示全屏加载蒙版，页面通过 inert 禁用操作，成功或失败后均解除。页面精简操作说明，详细规则保留在文档中。
