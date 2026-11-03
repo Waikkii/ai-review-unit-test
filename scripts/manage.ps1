@@ -59,9 +59,15 @@ function Start-ServiceProcess([string]$role, [string[]]$arguments) {
         Write-Host "$role is already running."
         return
     }
-    $process = Start-Process -FilePath $pythonExe -ArgumentList $arguments -WorkingDirectory $backendDir `
-        -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtimeDir "$role.out.log") `
-        -RedirectStandardError (Join-Path $runtimeDir "$role.err.log")
+    $previousIoEncoding = $env:PYTHONIOENCODING
+    try {
+        $env:PYTHONIOENCODING = 'utf-8'
+        $process = Start-Process -FilePath $pythonExe -ArgumentList $arguments -WorkingDirectory $backendDir `
+            -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runtimeDir "$role.out.log") `
+            -RedirectStandardError (Join-Path $runtimeDir "$role.err.log")
+    } finally {
+        $env:PYTHONIOENCODING = $previousIoEncoding
+    }
     $state[$role] = @{ id = $process.Id; started = $process.StartTime.ToUniversalTime().Ticks.ToString() }
     Save-State
     $script:started += $role

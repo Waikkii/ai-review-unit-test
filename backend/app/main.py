@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from hashlib import sha256
 import json
 import logging
+import time
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query
 from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,7 +13,7 @@ from .db import get_db, uid, now
 from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential
 from .schemas import Login, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
-from .auth import authenticate, issue_token, current_user, admin_user
+from .auth import authenticate, issue_token, current_user, admin_user, AuthenticationFailure, log_login_failure
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
@@ -60,28 +61,44 @@ def health():
 
 @app.post("/api/auth/login")
 def login(data: Login, db=Depends(get_db)):
+    started = time.perf_counter()
     try:
         identity = authenticate(data.username, data.password)
         name = identity["username"]
         if not isinstance(name, str) or not name.strip() or len(name) > 128:
             raise ValueError()
-    except Exception:
-        raise HTTPException(401, "用户名或密码错误，或内网认证服务不可用")
-    user = db.scalar(select(User).where(User.username == name))
-    if user is None:
-        admins = {x.strip() for x in settings.bootstrap_admins.split(",") if x.strip()}
-        role = "admin" if name in admins or (settings.app_mode == "demo" and name == "admin") else "user"
-        user = User(username=name, role=role)
-        db.add(user)
-        db.flush()
-    if not user.active:
-        raise HTTPException(403, "账号已停用")
-    if "_session_cookies" in identity:
-        store_credentials(db, name, data.username, data.password, identity["_session_cookies"])
-    audit(db, user, "session.login", user.id)
-    db.commit()
-    return {"access_token": issue_token(user), "token_type": "bearer",
-            "user": serial(user, "id username role active"), "mode": settings.app_mode}
+    except Exception as exc:
+        stage = exc.stage if isinstance(exc, AuthenticationFailure) else "identity_name"
+        log_login_failure(stage, data.username, started, exc)
+        raise HTTPException(401, "用户名或密码错误，或内网认证服务不可用") from None
+    stage = "user_lookup"
+    try:
+        user = db.scalar(select(User).where(User.username == name))
+        if user is None:
+            stage = "user_create"
+            admins = {x.strip() for x in settings.bootstrap_admins.split(",") if x.strip()}
+            role = "admin" if name in admins or (settings.app_mode == "demo" and name == "admin") else "user"
+            user = User(username=name, role=role)
+            db.add(user)
+            db.flush()
+        if not user.active:
+            log_login_failure("account_status", data.username, started)
+            raise HTTPException(403, "账号已停用")
+        if "_session_cookies" in identity:
+            stage = "session_store"
+            store_credentials(db, name, data.username, data.password, identity["_session_cookies"])
+        stage = "database_commit"
+        audit(db, user, "session.login", user.id)
+        db.commit()
+        stage = "token_issue"
+        return {"access_token": issue_token(user), "token_type": "bearer",
+                "user": serial(user, "id username role active"), "mode": settings.app_mode}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_login_failure(stage, data.username, started, exc)
+        db.rollback()
+        raise HTTPException(500, "登录处理失败，请联系管理员查看 API 日志") from None
 
 @app.get("/api/auth/me")
 def me(user=Depends(current_user)):
