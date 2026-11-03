@@ -30,6 +30,14 @@ class Item(Base):
     current: Mapped[dict] = mapped_column(JSON)
     version: Mapped[int] = mapped_column(Integer, default=1)
 
+class ItemSource(Base):
+    """原始 Excel 第一轮列组；旧报告无记录时默认为第一组。"""
+    __tablename__ = "item_sources"
+    item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    group_index: Mapped[int] = mapped_column(Integer, default=0)
+    group_label: Mapped[str] = mapped_column(Text, default="")
+
+
 class Run(Base):
     __tablename__ = "runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

@@ -8,7 +8,7 @@ from sqlalchemy import select, update, delete, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
 from .db import get_db, uid, now
-from .models import User, Report, Item, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential
+from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential
 from .schemas import Login, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
 from .auth import authenticate, issue_token, current_user, admin_user
@@ -124,6 +124,8 @@ def upload(file: UploadFile = File(...), user=Depends(current_user), db=Depends(
                          original=row["fields"], current=row["fields"]) for row in rows]
         db.add_all(uploaded)
         db.flush()
+        db.add_all([ItemSource(item_id=item.id, group_index=row["source_group"], group_label=row["source_label"])
+                    for item, row in zip(uploaded, rows)])
         db.add_all([ItemReviewState(item_id=item.id, revision=1, reviewed_revision=0) for item in uploaded])
         audit(db, user, "report.upload", report.id,
               after={"filename": filename, "sha256": report.sha256, "items": len(rows)})
@@ -152,6 +154,7 @@ def clear_report(report_id: str, user=Depends(current_user), db=Depends(get_db))
     db.execute(delete(RunControl).where(RunControl.run_id.in_(run_ids)))
     db.execute(delete(Run).where(Run.report_id == report.id))
     db.execute(delete(ItemNote).where(ItemNote.item_id.in_(item_ids)))
+    db.execute(delete(ItemSource).where(ItemSource.item_id.in_(item_ids)))
     db.execute(delete(Item).where(Item.report_id == report.id))
     audit(db, user, "report.clear", report.id, after={"filename": report.filename})
     db.delete(report)
@@ -166,29 +169,35 @@ def clear_report(report_id: str, user=Depends(current_user), db=Depends(get_db))
 @app.get("/api/reports/{report_id}/items")
 def items(report_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
           domain: list[str] | None = Query(None),
+          include_total: bool = False,
           user=Depends(current_user), db=Depends(get_db)):
     visible_report(db, report_id, user)
     _, result_label = effective_result_expressions()
-    query = select(Item, ItemNote, ItemReviewState, Result, ResultMeasurements, ResultWork, result_label).outerjoin(ItemNote, ItemNote.item_id == Item.id)
+    query = select(Item, ItemNote, ItemReviewState, Result, ResultMeasurements, ResultWork, result_label, ItemSource).outerjoin(ItemNote, ItemNote.item_id == Item.id)
+    query = query.outerjoin(ItemSource, ItemSource.item_id == Item.id)
     query = query.outerjoin(ItemReviewState, ItemReviewState.item_id == Item.id)
     query = query.outerjoin(Result, Result.id == ItemReviewState.source_result_id)
     query = query.outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id).where(Item.report_id == report_id)
     query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id)
     if domain:
         query = query.where(Item.domain.in_(domain))
-    rows = db.execute(query.order_by(Item.domain, Item.row_number).offset(offset).limit(limit))
-    return [{**serial(i, "id report_id domain row_number original current version"),
+    total = db.scalar(select(func.count()).select_from(query.subquery())) if include_total else None
+    rows = db.execute(query.order_by(Item.domain, Item.row_number, func.coalesce(ItemSource.group_index, 0), Item.id).offset(offset).limit(limit))
+    data = [{**serial(i, "id report_id domain row_number original current version"),
              "note": note.note if note else "", "note_version": note.version if note else 0,
              "pending_review": is_pending(state),
              "review_revision": state.revision if state else 1,
              "reviewed_revision": state.reviewed_revision if state else 0,
+             "source_group": source.group_index if source else 0,
+             "source_label": source.group_label if source else "",
              "review": {**serial(result, "id item_id domain row_number fields status explanation evidence suggestion"),
                         "result_label": label,
                         "ai_threshold": measured.ai_threshold if measured else "",
                         "ai_value": measured.ai_value if measured else ""}
                         if result and (not is_pending(state) or result.status == "missing_keyword"
                             and state.revision == (work.item_revision if work else 1)) else None}
-            for i, note, state, result, measured, work, label in rows]
+            for i, note, state, result, measured, work, label, source in rows]
+    return {"items": data, "total": total} if include_total else data
 
 
 @app.get("/api/reports/{report_id}/domains")
@@ -330,10 +339,12 @@ def run_detail(run_id: str, user=Depends(current_user), db=Depends(get_db)):
 @app.get("/api/runs/{run_id}/results")
 def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
             status: list[str] | None = Query(None), domain: list[str] | None = Query(None),
-            result: list[str] | None = Query(None), user=Depends(current_user), db=Depends(get_db)):
+            result: list[str] | None = Query(None), include_total: bool = False,
+            user=Depends(current_user), db=Depends(get_db)):
     visible_run(db, run_id, user)
     q = select(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     q = q.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
+    q = q.outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
     _, result_label = effective_result_expressions()
     if status:
         # 兼容既有状态筛选：缺少关键词也属于可补审的 pending 工作。
@@ -352,20 +363,24 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
         q = q.where(result_label.in_(result))
     if domain:
         q = q.where(Result.domain.in_(domain))
-    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork, result_label)
+    total = db.scalar(select(func.count()).select_from(q.subquery())) if include_total else None
+    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork, result_label, ItemSource)
         .outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id)
         .outerjoin(ItemNote, ItemNote.item_id == Result.item_id)
-        .order_by(Result.domain, Result.row_number).offset(offset).limit(limit))
-    return [{**serial(r, "id item_id domain row_number fields status explanation evidence suggestion raw"),
+        .order_by(Result.domain, Result.row_number, func.coalesce(ItemSource.group_index, 0), Result.id).offset(offset).limit(limit))
+    data = [{**serial(r, "id item_id domain row_number fields status explanation evidence suggestion raw"),
              "ai_threshold": measured.ai_threshold if measured else "",
              "ai_value": measured.ai_value if measured else "",
              "note": note.note if note else "", "note_version": note.version if note else 0,
              "pending_review": is_pending(state),
              "review_revision": state.revision if state else 1,
              "reviewed_revision": state.reviewed_revision if state else 0,
+             "source_group": source.group_index if source else 0,
+             "source_label": source.group_label if source else "",
              "result_label": label,
              "stale": bool(state and state.revision > (work.item_revision if work else 1))}
-            for r, measured, note, state, work, label in rows]
+            for r, measured, note, state, work, label, source in rows]
+    return {"items": data, "total": total} if include_total else data
 
 
 @app.get("/api/runs/{run_id}/result-options")
@@ -386,8 +401,10 @@ def export(run_id: str, user=Depends(current_user), db=Depends(get_db)):
         .where(Result.run_id == run.id))}
     notes = {n.item_id: n.note for n in db.scalars(select(ItemNote).join(Item)
         .where(Item.report_id == run.report_id))}
+    sources = {s.item_id: s.group_index for s in db.scalars(select(ItemSource).join(Item)
+        .where(Item.report_id == run.report_id))}
     content = export_excel((settings.data_dir / (run.report_id + ".xlsx")).read_bytes(), run,
-                           result_rows, measurements, notes)
+                           result_rows, measurements, notes, sources)
     audit(db, user, "run.export", run.id)
     db.commit()
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -42,9 +42,8 @@ def test_automatic_rules_are_reviewed_and_not_selected_by_missing_mode(client, h
     from openpyxl import load_workbook
     exported = client.get(f'/api/runs/{run["id"]}/export', headers=h)
     book = load_workbook(BytesIO(exported.content))
-    sheet = book.worksheets[-1]
-    column = [cell.value for cell in sheet[1]].index("AI结果") + 1
-    assert [sheet.cell(row, column).value for row in range(2, 5)] == ["缺少附件", "主观类", "缺少关键词"]
+    sheet = book["领域1"]
+    assert [sheet.cell(row, 15).value for row in (20, 21, 23)] == ["缺少附件", "主观类", "缺少关键词"]
     book.close()
     supplement = client.post(f'/api/reports/{report["id"]}/runs', headers=h,
                              json={"selection_mode": "missing"}).json()

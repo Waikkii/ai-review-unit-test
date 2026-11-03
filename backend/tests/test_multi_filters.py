@@ -98,3 +98,28 @@ def test_invalidated_results_move_to_pending_filter(client, headers):
     endpoint = f'/api/runs/{run["id"]}/results'
     assert client.get(endpoint, headers=h, params={"result": "电压判断错误。"}).json() == []
     assert len(client.get(endpoint, headers=h, params={"result": "待审查"}).json()) == 2
+
+
+def test_filtered_page_totals_include_off_page_rows_and_empty_pages(client, headers):
+    h = headers()
+    report, run = batch(client, h)
+    items = f'/api/reports/{report["id"]}/items'
+    results = f'/api/runs/{run["id"]}/results'
+    for endpoint in (items, results):
+        page = client.get(endpoint, headers=h, params=[("include_total", "true"),
+            ("domain", "领域 A&B"), ("domain", "协议"), ("limit", 2), ("offset", 4)]).json()
+        assert page["total"] == 6 and len(page["items"]) == 2
+        empty_page = client.get(endpoint, headers=h, params={"include_total": True, "offset": 100}).json()
+        assert empty_page == {"items": [], "total": 9}
+    selected = client.get(results, headers=h, params=[("include_total", "true"),
+        ("result", "通过"), ("result", "功率错误，请人工排查。"), ("limit", 1)]).json()
+    assert selected["total"] == 3 and len(selected["items"]) == 1
+    assert client.get(results, headers=h, params={"include_total": True, "result": "不存在"}).json() == {"items": [], "total": 0}
+    assert client.get(items, headers=h, params={"include_total": True, "domain": "不存在"}).json() == {"items": [], "total": 0}
+
+
+def test_page_totals_preserve_owner_permissions(client, headers):
+    owner, admin = headers(), headers("admin")
+    report, run = batch(client, admin)
+    for endpoint in (f'/api/reports/{report["id"]}/items', f'/api/runs/{run["id"]}/results'):
+        assert client.get(endpoint, headers=owner, params={"include_total": True}).status_code == 404

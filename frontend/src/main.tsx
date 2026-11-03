@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 
 type User = { id: string; username: string; role: string; active: boolean };
+type PageData<T> = { items: T[]; total: number };
 type Report = {
   id: string;
   owner_id: string;
@@ -30,6 +31,8 @@ type Item = {
   id: string;
   domain: string;
   row_number: number;
+  source_group?: number;
+  source_label?: string;
   current: Record<string, string>;
   version: number;
   note: string;
@@ -44,6 +47,8 @@ type Result = {
   item_id: string;
   domain: string;
   row_number: number;
+  source_group?: number;
+  source_label?: string;
   fields: Record<string, string>;
   status: string;
   result_label?: string;
@@ -62,6 +67,7 @@ type Result = {
 type ReviewRow = {
   itemId: string;
   domain: string;
+  sourceLabel?: string;
   fields: Record<string, string>;
   pendingReview: boolean;
   reviewRevision: number;
@@ -161,9 +167,60 @@ const emptyEntry = () => ({ a: "", b: "", c: "", d: "", e: "" });
 const keywordText = (payload: Record<string, unknown>) =>
   Object.entries(keywordFields).map(([key, label]) => `${label}：${String(payload[key] ?? "")}`).join("\n");
 const reportColumns = ["测试对象", "用例编号", "用例名称", "测试小项", "指标名称", "测试条件", "判据门限", "单位", "门限", "值", "备注", "附件链接"];
-const columnWeights = [4, 5, 6, 9, 7, 6, 7, 5, 3, 5, 5, 7, 4, 4, 4, 5, 6, 8, 9];
+const columnWeights = [4, 5, 6, 9, 7, 6, 7, 5, 3, 5, 5, 7, 4, 4, 4, 10, 6, 8, 7];
 const columnWidths = columnWeights.map(weight => `${weight / columnWeights.reduce((sum, n) => sum + n, 0) * 100}%`);
 const keywordIdentity = (values: unknown[]) => JSON.stringify(values);
+const keywordColumns = { ...keywordFields, version: "版本", operation: "操作" };
+const keywordCell = (k: Keyword, key: string): string => key === "version" ? String(k.version)
+  : key === "operation" ? (k.domain === entryDomain ? "编辑" : "")
+  : k.domain === entryDomain ? String(k.payload[key] ?? "")
+  : key === "a" ? k.domain : key === "e" ? JSON.stringify(k.payload) : k.key;
+
+function ColumnFilter({ label, options, value, onChange }: {
+  label: string; options: string[]; value?: string[]; onChange: (values?: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false), [search, setSearch] = useState("");
+  const [draft, setDraft] = useState<string[]>([]);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
+  const choices = useMemo(() => Array.from(new Set([...options, ...(value ?? [])])).sort((a, b) => a.localeCompare(b, "zh-CN")), [options, value]);
+  const matches = choices.filter(v => v.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+  const selected = new Set(draft);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => {
+      if (!panel.current?.contains(e.target as Node) && !trigger.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", close); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  return <><button ref={trigger} className={`column-filter-trigger ${value ? "active" : ""}`}
+    aria-label={`${label}筛选`} aria-expanded={open} title={`${label}筛选`} onClick={() => {
+      if (open) { setOpen(false); return; }
+      const rect = trigger.current!.getBoundingClientRect();
+      setPosition({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)), top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 390)) });
+      setSearch(""); setDraft(value ?? choices); setOpen(true);
+    }}>▾{value && <span className="filter-dot" />}</button>
+    {open && createPortal(<div ref={panel} className="column-filter-panel" style={position} role="dialog" aria-label={`${label}筛选选项`}>
+      <b>{label}</b><input aria-label={`搜索${label}选项`} placeholder="搜索…" value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="column-filter-tools">
+        <button onClick={() => setDraft(Array.from(new Set([...draft, ...matches])))}>全选搜索结果</button>
+        <button onClick={() => setDraft(draft.filter(v => !matches.includes(v)))}>取消选择</button>
+      </div>
+      <div className="column-filter-options">{matches.slice(0, 100).map(v => <label key={v}>
+        <input type="checkbox" checked={selected.has(v)} onChange={e => setDraft(e.target.checked ? [...draft, v] : draft.filter(x => x !== v))} />
+        <span>{v || "（空白）"}</span></label>)}
+        {matches.length > 100 && <p className="muted">共 {matches.length} 个选项，输入搜索以缩小范围。</p>}
+        {!matches.length && <p className="muted">无匹配选项</p>}
+      </div>
+      <div className="column-filter-footer"><button onClick={() => { onChange(undefined); setOpen(false); }}>清除此列筛选</button>
+        <button className="primary" onClick={() => {
+          const applied = search ? draft.filter(v => matches.includes(v)) : draft;
+          onChange(choices.every(v => applied.includes(v)) ? undefined : applied); setOpen(false);
+        }}>确定</button></div>
+    </div>, document.body)}</>;
+}
 
 function AttachmentLinks({ value }: { value: string }) {
   const links = value.match(/https?:\/\/[^\s<>"，,;；]+/gi) ?? [];
@@ -284,9 +341,10 @@ function App() {
   const [itemPage, setItemPage] = useState(0),
     [resultPage, setResultPage] = useState(0),
     [filter, setFilter] = useState<string[]>([]);
+  const [pageSize, setPageSize] = useState(100);
+  const [itemTotal, setItemTotal] = useState(0), [resultTotal, setResultTotal] = useState(0);
   const [resultOptions, setResultOptions] = useState<string[]>([]);
   const [reportPage, setReportPage] = useState(0),
-    [runPage, setRunPage] = useState(0),
     [changePage, setChangePage] = useState(0),
     [auditPage, setAuditPage] = useState(0);
   const [keywords, setKeywords] = useState<Keyword[]>([]),
@@ -303,6 +361,17 @@ function App() {
   const itemsQuery = useRef("");
   const keywordIndex = useMemo(() => new Map(keywords.filter(k => k.domain === entryDomain).map(k =>
     [keywordIdentity([k.payload.a, k.payload.b, k.payload.c, k.payload.d]), k])), [keywords]);
+  const [keywordFilters, setKeywordFilters] = useState<Record<string, string[] | undefined>>({});
+  const keywordView = useMemo(() => {
+    const keys = Object.keys(keywordColumns);
+    const rows = keywords.map(k => ({ keyword: k, values: Object.fromEntries(keys.map(key => [key, keywordCell(k, key)])) }));
+    const matches = (values: Record<string, string>, except?: string) => keys.every(key =>
+      key === except || keywordFilters[key] === undefined || keywordFilters[key]!.includes(values[key]));
+    return {
+      rows: rows.filter(r => matches(r.values)),
+      options: Object.fromEntries(keys.map(key => [key, Array.from(new Set(rows.filter(r => matches(r.values, key)).map(r => r.values[key])))])),
+    };
+  }, [keywords, keywordFilters]);
   useEffect(() => {
     if (!uploading) return;
     const previous = document.body.style.overflow;
@@ -385,25 +454,30 @@ function App() {
     if (!selected || tab !== "reports") return;
     let cancelled = false;
     // Background refreshes must keep the existing rows mounted and preserve scroll.
-    const query = json([selected.id, itemPage, domainFilter]);
+    const query = json([selected.id, itemPage, pageSize, domainFilter]);
     if (itemsQuery.current !== query) setItems([]);
     itemsQuery.current = query;
-    api<Item[]>(
+    api<PageData<Item>>(
       "/reports/" +
         selected.id +
-        "/items?limit=" +
-        PAGE +
+        "/items?include_total=true&limit=" +
+        pageSize +
         "&offset=" +
-        itemPage * PAGE + filterQuery(domainFilter),
+        itemPage * pageSize + filterQuery(domainFilter),
     )
       .then((v) => {
-        if (!cancelled) setItems(v);
+        if (!cancelled) {
+          const lastPage = Math.max(0, Math.ceil(v.total / pageSize) - 1);
+          setItemTotal(v.total);
+          if (itemPage > lastPage) setItemPage(lastPage);
+          else setItems(v.items);
+        }
       })
       .catch((e) => setError(e.message));
     return () => {
       cancelled = true;
     };
-  }, [selected, itemPage, domainFilter, tab, run?.state, reviewRefresh]);
+  }, [selected, itemPage, pageSize, domainFilter, tab, run?.state, reviewRefresh]);
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
@@ -417,14 +491,17 @@ function App() {
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
-    api<Run[]>(
-      "/reports/" +
-        selected.id +
-        "/runs?limit=" +
-        PAGE +
-        "&offset=" +
-        runPage * PAGE,
-    )
+    const loadRuns = async () => {
+      const all: Run[] = [];
+      let batch: Run[];
+      do {
+        batch = await api<Run[]>(`/reports/${selected.id}/runs?limit=200&offset=${all.length}`);
+        if (cancelled) return [];
+        all.push(...batch);
+      } while (batch.length === 200);
+      return all;
+    };
+    loadRuns()
       .then((v) => {
         if (!cancelled) setRuns(v);
       })
@@ -432,7 +509,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, runPage, run?.id, run?.state]);
+  }, [selected, run?.id, run?.state]);
   useEffect(() => {
     if (!run || tab !== "reports") return;
     let cancelled = false;
@@ -441,20 +518,23 @@ function App() {
       try {
         const [r, rows, options] = await Promise.all([
           api<Run>("/runs/" + run.id),
-          api<Result[]>(
+          api<PageData<Result>>(
             "/runs/" +
               run.id +
-              "/results?limit=" +
-              PAGE +
+              "/results?include_total=true&limit=" +
+              pageSize +
               "&offset=" +
-              resultPage * PAGE +
+              resultPage * pageSize +
               filterQuery(domainFilter, filter),
           ),
           api<string[]>("/runs/" + run.id + "/result-options"),
         ]);
         if (!cancelled) {
           setRun(r);
-          setResults(rows);
+          const lastPage = Math.max(0, Math.ceil(rows.total / pageSize) - 1);
+          setResultTotal(rows.total);
+          if (resultPage > lastPage) setResultPage(lastPage);
+          else setResults(rows.items);
           setResultOptions(options);
         }
       } catch (e) {
@@ -469,7 +549,7 @@ function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [run?.id, run?.state, resultPage, filter, domainFilter, tab, reviewRefresh]);
+  }, [run?.id, run?.state, resultPage, pageSize, filter, domainFilter, tab, reviewRefresh]);
   const pager = (page: number, setPage: (n: number) => void, count: number) => (
     <div className="pager">
       <button disabled={page === 0} onClick={() => setPage(page - 1)}>
@@ -487,7 +567,6 @@ function App() {
     setResults([]);
     setDomainFilter([]); setDomains([]); setAuthAlert(""); setResultOptions([]);
     setItemPage(0);
-    setRunPage(0);
     setResultPage(0);
     setFilter([]);
   };
@@ -564,10 +643,10 @@ function App() {
     setReviewRefresh(value => value + 1);
   }, true);
   const tableRows: ReviewRow[] = run
-    ? results.map(r => ({ itemId: r.item_id, domain: r.domain, fields: r.fields, note: r.note,
+    ? results.map(r => ({ itemId: r.item_id, domain: r.domain, sourceLabel: r.source_label, fields: r.fields, note: r.note,
         pendingReview: r.pending_review ?? true, reviewRevision: r.review_revision ?? 1, reviewedRevision: r.reviewed_revision ?? 0,
         noteVersion: r.note_version, result: r }))
-    : items.map(i => ({ itemId: i.id, domain: i.domain, fields: i.current, note: i.note,
+    : items.map(i => ({ itemId: i.id, domain: i.domain, sourceLabel: i.source_label, fields: i.current, note: i.note,
         pendingReview: i.pending_review, reviewRevision: i.review_revision, reviewedRevision: i.reviewed_revision,
         noteVersion: i.note_version, item: i, result: i.review ? { ...i.review, pending_review: i.pending_review } : undefined }));
 
@@ -594,7 +673,7 @@ function App() {
         const status = pending ? "pending" : r?.status ?? "pending";
         const canEdit = selected?.owner_id === user?.id;
         return <tr key={row.itemId} className={`review-row review-${status}`}>
-          <td className="domain-cell">{row.domain}</td>
+          <td className="domain-cell">{row.domain}{row.sourceLabel && <span className="source-group-label" title={`第一轮分组：${row.sourceLabel}`}>{row.sourceLabel}</span>}</td>
           {reportColumns.map(c => <td key={c}>{c === "附件链接"
             ? <AttachmentLinks value={row.fields[c] ?? ""} /> : row.fields[c] ?? ""}</td>)}
           <td className="ai-cell">{pending ? "" : r?.ai_threshold ?? ""}</td>
@@ -889,7 +968,6 @@ function App() {
                         </button>
                       ))}
                     </div>
-                    {pager(runPage, setRunPage, runs.length)}
                     </details>
                     {run && <>
                       <div className="progress-head">
@@ -919,9 +997,19 @@ function App() {
                       <span>领域</span><MultiSelect label="领域筛选" allLabel="全部领域" options={domains}
                         value={domainFilter} onChange={value => { setDomainFilter(value); setItemPage(0); setResultPage(0); }} />
                     </div>
-                    <h3>{run ? "审查结果" : "解析后的测试项"}</h3>
+                    <h3>{run ? "审查结果" : "测试项"}</h3>
                     {reviewTable()}
-                    {pager(run ? resultPage : itemPage, run ? setResultPage : setItemPage, tableRows.length)}
+                    <div className="pager item-pager">
+                      <label>每页 <select aria-label="每页测试项数" value={pageSize} onChange={e => {
+                        setPageSize(Number(e.target.value)); setItemPage(0); setResultPage(0);
+                      }}>{[10, 20, 50, 100].map(size => <option key={size} value={size}>{size}</option>)}</select> 项</label>
+                      <span>共 {run ? resultTotal : itemTotal} 项</span>
+                      <button disabled={(run ? resultPage : itemPage) === 0} onClick={() =>
+                        run ? setResultPage(resultPage - 1) : setItemPage(itemPage - 1)}>上一页</button>
+                      <span>第 {(run ? resultPage : itemPage) + 1} / {Math.max(1, Math.ceil((run ? resultTotal : itemTotal) / pageSize))} 页</span>
+                      <button disabled={(run ? resultPage : itemPage) + 1 >= Math.max(1, Math.ceil((run ? resultTotal : itemTotal) / pageSize))}
+                        onClick={() => run ? setResultPage(resultPage + 1) : setItemPage(itemPage + 1)}>下一页</button>
+                    </div>
                   </>
                 )}
               </section>
@@ -986,17 +1074,24 @@ function App() {
               </form>
             </section>
             <section className="card">
-              <h2>当前关键词</h2>
+              <div className="section-head"><h2>当前关键词</h2><div className="actions">
+                <span className="muted">{keywordView.rows.length} / {keywords.length} 条</span>
+                {Object.values(keywordFilters).some(v => v !== undefined) && <button onClick={() => setKeywordFilters({})}>清除全部筛选</button>}
+              </div></div>
               {keywords.length === 0 && (
                 <p className="empty">尚未配置关键词。</p>
               )}
               {keywords.length > 0 && <div className="keyword-table-scroll"><table className="keyword-table">
-                <thead><tr>{Object.values(keywordFields).map(label => <th key={label}>{label}</th>)}<th>版本</th><th>操作</th></tr></thead>
-                <tbody>{keywords.map(k => <tr key={k.id}>
-                  {Object.keys(keywordFields).map(key => <td key={key}>{k.domain === entryDomain ? String(k.payload[key] ?? "") : key === "a" ? k.domain : key === "e" ? JSON.stringify(k.payload) : k.key}</td>)}
-                  <td>{k.version}</td><td>{k.domain === entryDomain && <button onClick={() => kwFrom(k)}>编辑</button>}</td>
+                <thead><tr>{Object.entries(keywordColumns).map(([key, label]) => <th key={key}><div className="keyword-column-heading"><span>{label}</span>
+                  <ColumnFilter label={label} options={keywordView.options[key]} value={keywordFilters[key]}
+                    onChange={value => setKeywordFilters(previous => ({ ...previous, [key]: value }))} />
+                </div></th>)}</tr></thead>
+                <tbody>{keywordView.rows.map(({keyword: k, values}) => <tr key={k.id}>
+                  {Object.keys(keywordFields).map(key => <td key={key}>{values[key]}</td>)}
+                  <td>{values.version}</td><td>{k.domain === entryDomain && <button onClick={() => kwFrom(k)}>编辑</button>}</td>
                 </tr>)}</tbody>
               </table></div>}
+              {keywords.length > 0 && keywordView.rows.length === 0 && <p className="empty">没有符合筛选条件的关键词。</p>}
             </section>
             <section className="card full">
               <h2>{user.role === "admin" ? "关键词审批记录" : "我的申请"}</h2>

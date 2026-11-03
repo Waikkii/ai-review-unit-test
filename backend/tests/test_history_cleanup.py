@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from app.cleanup import clean_audit, reset_history
 from app.config import settings
 from app.db import Session
-from app.models import (Audit, ChangeRequest, Item, ItemNote, ItemReviewState, Report,
+from app.models import (Audit, ChangeRequest, Item, ItemNote, ItemSource, ItemReviewState, Report,
                         Result, ResultMeasurements, ResultWork, Run, RunControl, User)
 from app.worker import process_once
 from test_workflow import upload, change
@@ -39,6 +39,7 @@ def test_clear_report_removes_related_data_preserves_other_report_and_keyword_re
             assert db.scalar(select(func.count()).select_from(model)) == 0
         assert db.scalar(select(func.count()).select_from(Item)) == other["item_count"]
         assert db.scalar(select(func.count()).select_from(ItemReviewState)) == other["item_count"]
+        assert db.scalar(select(func.count()).select_from(ItemSource)) == other["item_count"]
     rows = client.get('/api/audit', headers=owner).json()
     assert any(row["action_label"] == "清除报告历史" and row["target_label"] == "sample.xlsx" for row in rows)
 
@@ -124,7 +125,7 @@ def test_reset_history_dry_run_and_apply_preserve_users_keywords_and_approvals(c
         assert db.get(Report, report["id"])
         reset_history(db, apply=True)
         db.commit()
-        for model in (Report, Item, Run, Result, ItemReviewState, RunControl, ResultMeasurements, ResultWork):
+        for model in (Report, Item, ItemSource, Run, Result, ItemReviewState, RunControl, ResultMeasurements, ResultWork):
             assert db.scalar(select(func.count()).select_from(model)) == 0
         assert db.scalar(select(func.count()).select_from(User)) == 2
         assert db.scalar(select(func.count()).select_from(Keyword)) == 1

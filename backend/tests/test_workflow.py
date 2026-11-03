@@ -93,13 +93,14 @@ def test_run_progress_export_and_immutable_snapshots(client, headers):
     exported = client.get('/api/runs/'+run["id"]+'/export',headers=h)
     book = load_workbook(BytesIO(exported.content))
     assert book.sheetnames[:2] == ["射频","协议"]
-    assert len(book.worksheets[-1]["A"]) == 4
+    assert book.sheetnames == ["射频", "协议"]
+    assert book["协议"]["N1"].value == "AI结果"
     book.close()
     second = client.post(f"/api/reports/{rid}/runs",headers=h).json()
     assert second["revision"] == 1
     process_once()
     book = load_workbook(BytesIO(client.get('/api/runs/'+second["id"]+'/export',headers=h).content))
-    assert any(cell.value == "'=1+1" for row in book.worksheets[-1] for cell in row)
+    assert any(cell.value == "'=1+1" for sheet in book for row in sheet for cell in row)
     book.close()
 
 def test_keyword_approval_conflict_and_audit(client, headers):

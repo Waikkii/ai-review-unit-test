@@ -124,5 +124,8 @@ def test_detail_upload_edit_review_and_export(client, headers):
         out = load_workbook(stream)
         assert out.sheetnames[:3] == ["封面", "目录", "领域1"]
         assert out["领域1"].cell(first, 10).value == 0
-        assert out.worksheets[-1].max_row == 4
+        assert out.sheetnames == ["封面", "目录", "领域1"]
+        assert out["领域1"]["M16"].value == "AI审查"
+        assert out["领域1"]["O20"].value == "缺少附件"
+        assert out["领域1"]["O21"].value == "缺少关键词"
         out.close()

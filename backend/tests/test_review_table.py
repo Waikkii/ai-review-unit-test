@@ -3,7 +3,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 from sqlalchemy import create_engine, inspect
 
-from app.models import Base, ItemNote, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential
+from app.models import Base, ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential
 from app.schemas import ReviewVerdict
 from app.worker import process_once
 from test_workflow import upload
@@ -82,14 +82,16 @@ def test_progress_measurements_notes_filters_and_export(client, headers, monkeyp
     names = [c.value for c in sheet[1]]
     assert sheet.cell(2, names.index("AI门限") + 1).value == "≤ 10 dB"
     assert sheet.cell(2, names.index("AI值") + 1).value == "8.5 dB"
-    assert sheet.cell(2, names.index("用户备注") + 1).value == "'=自定义备注"
+    first_sheet = book[before[0]["domain"]]
+    first_names = [c.value for c in first_sheet[1]]
+    assert first_sheet.cell(2, first_names.index("AI备注") + 1).value == "'=自定义备注"
     book.close()
 
 
 def test_additive_upgrade_is_idempotent_and_preserves_existing_tables(tmp_path, monkeypatch):
     import app.migrate as migration
     engine = create_engine("sqlite:///" + (tmp_path / "legacy.db").as_posix())
-    added = (ItemNote.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
+    added = (ItemNote.__table__, ItemSource.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
              ResultWork.__table__, RunControl.__table__, SessionCredential.__table__)
     old_tables = [t for t in Base.metadata.sorted_tables if t not in added]
     Base.metadata.create_all(engine, tables=old_tables)
@@ -100,7 +102,7 @@ def test_additive_upgrade_is_idempotent_and_preserves_existing_tables(tmp_path, 
     monkeypatch.setattr(migration, "engine", engine)
     migration.main()
     migration.main()
-    assert {"item_notes", "result_measurements", "item_review_states", "result_work", "run_controls", "session_credentials"} <= set(inspect(engine).get_table_names())
+    assert {"item_notes", "item_sources", "result_measurements", "item_review_states", "result_work", "run_controls", "session_credentials"} <= set(inspect(engine).get_table_names())
     indexes = inspect(engine).get_indexes("runs")
     assert "paused" in str(next(i for i in indexes if i["name"] == "one_active_run_per_report")["dialect_options"]["sqlite_where"])
     with engine.connect() as connection:

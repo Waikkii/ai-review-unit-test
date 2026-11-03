@@ -3,14 +3,14 @@ from .config import settings
 from .db import engine
 from sqlalchemy import inspect, select, update
 from sqlalchemy.orm import Session
-from .models import ItemNote, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword
+from .models import ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword
 from .keywords import matching_keywords
 from .services import keyword_dict
 
 
 def main():
     settings.validate_runtime()
-    for table in (ItemNote.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
+    for table in (ItemNote.__table__, ItemSource.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
                   ResultWork.__table__, RunControl.__table__, SessionCredential.__table__):
         table.create(engine, checkfirst=True)
     indexes = inspect(engine).get_indexes("runs")

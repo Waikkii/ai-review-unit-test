@@ -6,7 +6,7 @@ import sqlite3
 
 from sqlalchemy import delete, func, select
 from .db import Session, engine
-from .models import (Audit, ChangeRequest, Item, ItemNote, ItemReviewState, Report,
+from .models import (Audit, ChangeRequest, Item, ItemNote, ItemSource, ItemReviewState, Report,
                      Result, ResultMeasurements, ResultWork, Run, RunControl)
 from .services import RECORDED_ACTIONS
 
@@ -33,7 +33,7 @@ def reset_history(db, apply=False):
         from sqlalchemy import update
         db.execute(update(ChangeRequest).values(result_id=None))
         for model in (ItemReviewState, ResultMeasurements, ResultWork, Result, RunControl,
-                      Run, ItemNote, Item, Report):
+                      Run, ItemNote, ItemSource, Item, Report):
             db.execute(delete(model))
         db.execute(delete(Audit).where(Audit.action.in_(
             {"report.upload", "report.download", "report.clear", "run.start", "run.finished", "run.export", "item.review_state"})))

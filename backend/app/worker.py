@@ -5,7 +5,7 @@ from datetime import timedelta
 from sqlalchemy import select, update, or_, and_, func
 from .config import settings
 from .db import Session, now, uid
-from .models import Run, Result, User, ResultMeasurements, RunControl, ItemReviewState, ResultWork
+from .models import Run, Result, User, ResultMeasurements, RunControl, ItemReviewState, ResultWork, ItemSource
 from .auth_sessions import SessionAuthFailure, AUTH_FAILURE_MESSAGE
 from .reviewer import review, rule_version
 from .services import audit
@@ -62,8 +62,9 @@ def process_once():
                 return True
             run.lease_until = now() + timedelta(seconds=settings.lease_seconds)
             db.commit()
-            result = db.scalar(select(Result).where(Result.run_id == claimed, Result.status == "pending")
-                               .order_by(Result.domain, Result.row_number).limit(1))
+            result = db.scalar(select(Result).outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
+                               .where(Result.run_id == claimed, Result.status == "pending")
+                               .order_by(Result.domain, Result.row_number, func.coalesce(ItemSource.group_index, 0), Result.id).limit(1))
             if not result:
                 _complete(db, run)
                 db.commit()
