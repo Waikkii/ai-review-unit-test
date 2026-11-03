@@ -18,14 +18,20 @@ class DetailLayout:
     end: int
 
 
+def header_text(value):
+    """只规范化表头中的排版空白，业务单元格的原文不变。"""
+    return re.sub(r"[\s\u200b\ufeff]+", "", str(value)) if value is not None else ""
+
+
 def detail_header(sheet):
-    """识别第一轮下完整的四列组，不能把其他轮次或 AI 列当成输入。"""
+    """按表头结构识别最左侧数据区，分组标题文字不限。"""
     sections = [cell.row for row in sheet.iter_rows() for cell in row
-                if cell.value == "测试详情"]
+                if header_text(cell.value) == "测试详情"]
     if len(sections) > 1:
         raise ValueError(f"{sheet.title}: 存在多个测试详情区域，暂不支持")
     start = sections[0] + 1 if sections else 1
     end = min(sheet.max_row, start + 29)
+    failures = []
     for top in range(start, end + 1):
         candidates = [(top, top + 2)] if sections else [(top, top)]
         for first, bottom in candidates:
@@ -34,7 +40,7 @@ def detail_header(sheet):
             positions = {name: set() for name in ["测试对象", *COLUMNS[:7]]}
             for row in sheet.iter_rows(min_row=first, max_row=bottom):
                 for cell in row:
-                    name = str(cell.value).strip() if cell.value is not None else ""
+                    name = header_text(cell.value)
                     if name in positions:
                         positions[name].add(cell.column)
             if all(len(positions[name]) == 1 for name in COLUMNS[:7]) and len(positions["测试对象"]) <= 1:
@@ -42,37 +48,59 @@ def detail_header(sheet):
                 if sections:
                     parents = ["测试对象", *COLUMNS[:7]]
                     if "测试对象" not in columns:
+                        failures.append((0, "公共表头缺失：测试对象"))
                         continue
-                    if not all(sheet.cell(first, columns[name]).value == name and any(
+                    invalid_parents = [name for name in parents if not (header_text(sheet.cell(first, columns[name]).value) == name and any(
                         area.min_row == first and area.max_row == bottom
                         and area.min_col == columns[name] == area.max_col
-                        for area in sheet.merged_cells.ranges) for name in parents):
+                        for area in sheet.merged_cells.ranges))]
+                    if invalid_parents:
+                        details = []
+                        for name in invalid_parents:
+                            cell = sheet.cell(first, columns[name])
+                            actual = next((str(a) for a in sheet.merged_cells.ranges if cell.coordinate in a), "未合并")
+                            details.append(f"{name}({cell.coordinate}，实际{actual})")
+                        anchored = all(header_text(sheet.cell(first, columns[name]).value) == name for name in parents)
+                        failures.append((1 if anchored else -1, f"第 {first}–{bottom} 行表头：" + "、".join(details) + "须各纵向合并三行"))
                         continue
-                    rounds = [area for area in sheet.merged_cells.ranges
-                              if area.min_row == first and area.max_row == bottom - 1
-                              and sheet.cell(first, area.min_col).value == "第一轮"]
-                    if len(rounds) != 1:
+                    regions = sorted([area for area in sheet.merged_cells.ranges
+                                      if area.min_row == first and area.min_col > max(columns.values())],
+                                     key=lambda area: area.min_col)
+                    if not regions or regions[0].max_row != bottom - 1:
+                        failures.append((2, f"第 {first}–{bottom - 1} 行须有两行合并的数据分组标题，标题文字不限，实际：" + (str(regions[0]) if regions else "未找到")))
                         continue
-                    left, right = rounds[0].min_col, rounds[0].max_col
+                    left, right = regions[0].min_col, regions[0].max_col
                     # 允许右侧存在有自己分组标题的其他轮次 / AI 审查；无归属的重名列拒绝猜测。
                     other_headers = [area for area in sheet.merged_cells.ranges
                                      if area.min_row == first and area.max_row == bottom - 1
-                                     and area.min_col > right and sheet.cell(first, area.min_col).value]
-                    if any(cell.value in COLUMNS[7:] and not any(a.min_col <= cell.column <= a.max_col for a in other_headers)
-                           for cell in sheet[bottom] if cell.column > right):
+                                     and area.min_col > right]
+                    stray = [cell for cell in sheet[bottom] if cell.column > right and header_text(cell.value) in COLUMNS[7:]
+                             and not any(a.min_col <= cell.column <= a.max_col for a in other_headers)]
+                    if stray:
+                        failures.append((3, "存在无分组归属的重复字段：" + "、".join(f"{c.coordinate}={header_text(c.value)}" for c in stray)))
                         continue
                 else:
-                    repeated = [cell.column for cell in sheet[bottom] if cell.value in COLUMNS[7:]]
+                    repeated = [cell.column for cell in sheet[bottom] if header_text(cell.value) in COLUMNS[7:]]
                     if not repeated:
                         continue
                     left, right = min(repeated), max(repeated)
                 if right < max(columns.values()) or (right - left + 1) % 4:
+                    failures.append((3, f"数据区有 {right - left + 1} 列，须按“门限、值、备注、附件链接”四列完整分组"))
                     continue
                 groups = [dict(zip(COLUMNS[7:], range(col, col + 4))) for col in range(left, right + 1, 4)]
-                if not all(sheet.cell(bottom, col).value == name for group in groups for name, col in group.items()):
+                wrong = [(name, sheet.cell(bottom, col).coordinate) for group in groups for name, col in group.items()
+                         if header_text(sheet.cell(bottom, col).value) != name]
+                if wrong:
+                    failures.append((4, "第三行明细字段缺失或错位：" + "、".join(f"{coord}应为{name}" for name, coord in wrong)))
                     continue
                 return DetailLayout(first, bottom, columns, groups, left, right)
-    raise ValueError(f"{sheet.title}: 未找到完整、唯一的测试详情三行表头，请检查合并单元格和字段名")
+            else:
+                missing = [name for name, cols in positions.items() if len(cols) != 1]
+                score = sum(bool(cols) for cols in positions.values())
+                if score >= 5:
+                    failures.append((0, "公共表头缺失或重复：" + "、".join(missing)))
+    detail = max(failures, key=lambda item: item[0])[1] if failures else "未定位到公共字段，请检查“测试详情”标题、字段名及表头位置"
+    raise ValueError(f"{sheet.title}: 未找到完整、唯一的测试详情三行表头；{detail}")
 
 
 def parse_excel(content):

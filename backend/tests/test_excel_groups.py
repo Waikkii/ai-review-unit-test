@@ -61,6 +61,36 @@ def test_two_groups_are_independent_and_preserve_band_labels():
     assert all(set(r["fields"]) == {"测试对象", *COLUMNS} for r in rows)
 
 
+@pytest.mark.parametrize('title', ['USB功能测试', '实测数据', '第二阶段', '', None])
+def test_group_title_text_is_unrestricted_in_upload_and_export(client, headers, title):
+    h = headers()
+    book, sheet = two_group_workbook()
+    sheet.title = 'USB接口'
+    sheet['I15'] = title
+    # A later section literally called 第一轮 must not replace the leftmost input section.
+    sheet.merge_cells('Q15:T16')
+    sheet['Q15'] = '第一轮'
+    for col, name in enumerate(COLUMNS[7:], 17):
+        sheet.cell(17, col, name)
+    sheet['R19'] = '不应读取右侧其他区'
+    content = serialize(book)
+    parsed = parse_excel(content)
+    assert len(parsed) == 6
+    assert [r['fields']['值'] for r in parsed[:2]] == ['0', '21']
+    uploaded = client.post('/api/reports', headers=h, files={'file': ('usb.xlsx', content)})
+    assert uploaded.status_code == 201, uploaded.text
+    run = client.post(f'/api/reports/{uploaded.json()["id"]}/runs', headers=h).json()
+    assert process_once()
+    response = client.get(f'/api/runs/{run["id"]}/export', headers=h)
+    assert response.status_code == 200, response.text
+    output = load_workbook(BytesIO(response.content))
+    assert output['USB接口']['I15'].value == (title or None)
+    assert output['USB接口']['Q15'].value == 'AI审查'
+    assert output['USB接口']['Y15'].value == '第一轮'
+    assert output['USB接口']['Z19'].value == '不应读取右侧其他区'
+    output.close()
+
+
 def test_formula_in_second_group_is_not_silently_ignored():
     book, sheet = two_group_workbook()
     sheet["N22"] = "=1+1"

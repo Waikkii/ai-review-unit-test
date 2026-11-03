@@ -66,6 +66,47 @@ def test_detail_three_row_header_and_value_selection():
     assert rows[2]["fields"]["附件链接"] == "https://intranet.example/ok.jpg"
 
 
+def test_three_row_header_accepts_display_whitespace_without_changing_data(client, headers):
+    book, sheet = detail_workbook()
+    sheet.title = "USB接口"
+    sheet["A14"] = " 测试\n详情 "
+    for coord, value in {"A16": "测试\n对象", "B16": "用例 编号", "C16": "用例\u00a0名称", "D16": "测试\u200b小项",
+                         "E16": "指标\u3000名称", "F16": "测试\t条件", "G16": "判据\n门限", "H16": " 单位\ufeff ",
+                         "I16": "第 一\n轮", "I18": "门 限", "J18": " 值 ", "K18": "备\n注", "L18": "附件\n链接"}.items():
+        sheet[coord] = value
+    sheet["D20"] = "业务 内容\n保持原样"
+    content = serialize(book)
+    rows = parse_excel(content)
+    assert len(rows) == 3 and rows[0]["fields"]["测试小项"] == "业务 内容\n保持原样"
+    h = headers()
+    uploaded = client.post('/api/reports', headers=h, files={'file': ('usb.xlsx', content)})
+    assert uploaded.status_code == 201, uploaded.text
+    run = client.post(f'/api/reports/{uploaded.json()["id"]}/runs', headers=h).json()
+    assert process_once()
+    response = client.get(f'/api/runs/{run["id"]}/export', headers=h)
+    assert response.status_code == 200, response.text
+    from openpyxl import load_workbook
+    exported = load_workbook(BytesIO(response.content))
+    assert exported['USB接口']['D20'].value == '业务 内容\n保持原样'
+    assert exported['USB接口']['A16'].value == '测试\n对象'
+    assert exported['USB接口']['O20'].value == '缺少附件'
+    exported.close()
+
+
+@pytest.mark.parametrize('error,expected', [('merge', 'A15:A16'), ('field', '单位'), ('round', 'I16:L16'), ('stray', 'N18')])
+def test_header_errors_identify_the_actual_field_or_range(error, expected):
+    book, sheet = detail_workbook(header_rows=2, title_rows=1) if error == 'merge' else detail_workbook()
+    if error == 'field':
+        sheet['H16'] = '其他字段'
+    elif error == 'round':
+        sheet.unmerge_cells('I16:L17'); sheet.merge_cells('I16:L16')
+    elif error == 'stray':
+        sheet['N18'] = '值'
+    with pytest.raises(ValueError) as exc:
+        parse_excel(serialize(book))
+    assert expected in str(exc.value)
+
+
 def test_obsolete_two_row_detail_header_is_rejected():
     book, _ = detail_workbook(header_rows=2, title_rows=1)
     with pytest.raises(ValueError, match="三行表头"):

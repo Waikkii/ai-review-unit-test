@@ -738,7 +738,7 @@ function App() {
         const status = pending ? "pending" : r?.status ?? "pending";
         const canEdit = selected?.owner_id === user?.id;
         return <tr key={row.itemId} className={`review-row review-${status}`}>
-          <td className="domain-cell">{row.domain}{row.sourceLabel && <span className="source-group-label" title={`第一轮分组：${row.sourceLabel}`}>{row.sourceLabel}</span>}</td>
+          <td className="domain-cell">{row.domain}{row.sourceLabel && <span className="source-group-label" title={`数据分组：${row.sourceLabel}`}>{row.sourceLabel}</span>}</td>
           {reportColumns.map(c => <td key={c}>{c === "附件链接"
             ? <AttachmentLinks value={row.fields[c] ?? ""} /> : row.fields[c] ?? ""}</td>)}
           <td className="ai-cell">{pending ? "" : r?.ai_threshold ?? ""}</td>
