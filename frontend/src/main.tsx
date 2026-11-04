@@ -401,6 +401,7 @@ function App() {
   const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
   const [keywordDialog, setKeywordDialog] = useState(false);
   const [reviewRefresh, setReviewRefresh] = useState(0);
+  const runViewVersion = useRef(0);
   const itemsQuery = useRef("");
   const keywordIndex = useMemo(() => new Map(keywords.filter(k => k.domain === entryDomain).map(k =>
     [keywordIdentity([k.payload.a, k.payload.b, k.payload.c, k.payload.d]), k])), [keywords]);
@@ -446,6 +447,7 @@ function App() {
   };
   useEffect(() => {
     const expire = () => {
+      runViewVersion.current += 1;
       token = "";
       setUser(null);
       setPassword("");
@@ -555,12 +557,15 @@ function App() {
   }, [selected, run?.id, run?.state]);
   useEffect(() => {
     if (!run || tab !== "reports") return;
+    const viewVersion = runViewVersion.current;
     let cancelled = false;
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const [r, rows, options] = await Promise.all([
-          api<Run>("/runs/" + run.id),
+        // 先读状态：若批次已结束，后续结果查询必须发生在该次提交之后。
+        const r = await api<Run>("/runs/" + run.id);
+        if (cancelled || viewVersion !== runViewVersion.current) return;
+        const [rows, options] = await Promise.all([
           api<PageData<Result>>(
             "/runs/" +
               run.id +
@@ -572,7 +577,7 @@ function App() {
           ),
           api<string[]>("/runs/" + run.id + "/result-options?include_reviewed=true"),
         ]);
-        if (!cancelled) {
+        if (!cancelled && viewVersion === runViewVersion.current) {
           setRun(r);
           const lastPage = Math.max(0, Math.ceil(rows.total / pageSize) - 1);
           setResultTotal(rows.total);
@@ -581,9 +586,9 @@ function App() {
           setResultOptions(options);
         }
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled && viewVersion === runViewVersion.current) setError((e as Error).message);
       }
-      if (!cancelled && ["queued", "running", "pausing"].includes(run.state)) {
+      if (!cancelled && viewVersion === runViewVersion.current && ["queued", "running", "pausing"].includes(run.state)) {
         timer = window.setTimeout(poll, 1000);
       }
     };
@@ -605,6 +610,7 @@ function App() {
     </div>
   );
   const chooseReport = (r: Report) => {
+    runViewVersion.current += 1;
     setSelected(r);
     setRun(null);
     setResults([]);
@@ -618,6 +624,7 @@ function App() {
     void act(async () => {
       const response = await api<{ warning: string }>(`/reports/${report.id}`, { method: "DELETE" });
       if (selected?.id === report.id) {
+        runViewVersion.current += 1;
         setSelected(null); setRun(null); setRuns([]); setItems([]); setResults([]);
       }
       const remaining = await api<Report[]>(`/reports?limit=${PAGE}&offset=${reportPage * PAGE}`);
@@ -631,12 +638,13 @@ function App() {
     void act(async () => {
       await api(`/runs/${history.id}`, { method: "DELETE" });
       setRuns(previous => previous.filter(r => r.id !== history.id));
-      if (run?.id === history.id) { setRun(null); setResults([]); setFilter([]); setResultOptions([]); setItemPage(0); }
+      if (run?.id === history.id) { runViewVersion.current += 1; setRun(null); setResults([]); setFilter([]); setResultOptions([]); setItemPage(0); }
       setReviewRefresh(value => value + 1);
       setNotice("已删除该审查批次及其结果");
     });
   };
   const chooseRun = (r: Run) => {
+    runViewVersion.current += 1;
     setResults([]);
     setRun(r);
     setReviewMode(r.selection_mode ?? "full");
@@ -650,6 +658,7 @@ function App() {
     });
     if (operation === "restart") chooseRun(updated);
     else {
+      runViewVersion.current += 1;
       setRun(updated);
       setRuns(previous => previous.map(history => history.id === updated.id ? updated : history));
     }
@@ -709,6 +718,7 @@ function App() {
   const changeReviewState = (row: ReviewRow, state: string) => act(async () => {
     await api(`/items/${row.itemId}/review-state`, { method: "PATCH",
       body: json({ state, revision: row.reviewRevision, reviewed_revision: row.reviewedRevision }) });
+    runViewVersion.current += 1;
     setReviewRefresh(value => value + 1);
   }, true);
   const tableRows: ReviewRow[] = run
@@ -857,6 +867,7 @@ function App() {
             onClick={() => void act(async () => {
               await api("/auth/logout", { method: "POST" });
               token = "";
+              runViewVersion.current += 1;
               setUser(null);
               setSelected(null);
               setRun(null);
@@ -1035,7 +1046,7 @@ function App() {
                         <MultiSelect label="筛选审查结果" allLabel="全部审查结果" options={resultOptions}
                           value={filter} onChange={value => { setFilter(value); setResultPage(0); }} />
                         <div className="actions">
-                          <button onClick={() => { setItemPage(0); setRun(null); }}>查看全部测试项</button>
+                          <button onClick={() => { runViewVersion.current += 1; setItemPage(0); setRun(null); }}>查看全部测试项</button>
                           {selected.owner_id === user.id && <>
                             {["queued", "running", "pausing"].includes(run.state) && <button disabled={busy || run.state === "pausing"}
                               onClick={() => void controlRun("pause")}>{run.state === "pausing" ? "正在暂停…" : "暂停"}</button>}

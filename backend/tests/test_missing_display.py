@@ -114,3 +114,40 @@ def test_existing_missing_history_is_backfilled_idempotently(client,headers,monk
     assert len(rows)==3 and len([r for r in rows if r['ai_value']=='旧值'])==2
     with Session() as db:
         assert db.scalar(select(func.count()).select_from(RunRetainedItem))==2
+
+
+def test_supplemental_real_adapter_three_strings_reach_display(client, headers, monkeypatch):
+    from test_local_review import configure_rule
+    from test_workflow import change
+    owner, admin = headers(), headers('admin')
+    report = upload(client, owner)
+    response = client.post('/api/keyword-requests', headers=admin,
+        json={**change(domain='射频'), 'payload': {'e': '功率'}})
+    assert response.status_code == 201
+    configure_rule(monkeypatch, lambda *args: ('旧门限', '旧值', '通过'))
+    base = f'/api/reports/{report["id"]}'
+    first = client.post(base + '/runs', headers=owner).json()
+    assert process_once()
+    item = next(i for i in client.get(base + '/items', headers=owner).json() if i['domain'] == '射频')
+    client.patch(f'/api/items/{item["id"]}/review-state', headers=owner,
+        json={'state':'pending', 'revision':item['review_revision'], 'reviewed_revision':item['reviewed_revision']})
+    calls = []
+    def local_rule(*args):
+        calls.append(args)
+        return '25', '21', '通过'
+    configure_rule(monkeypatch, local_rule)
+    response = client.post(f'/api/runs/{first["id"]}/restart', headers=owner, json={'selection_mode':'missing'})
+    assert response.status_code == 200, response.text
+    run = response.json()
+    queued = client.get(f'/api/runs/{run["id"]}/results?include_reviewed=true', headers=owner).json()
+    pending = next(r for r in queued if r['item_id'] == item['id'])
+    assert pending['pending_review']
+    assert (pending['ai_threshold'], pending['ai_value'], pending['explanation']) == ('', '', '')
+    assert process_once() and len(calls) == 1
+    rows = client.get(f'/api/runs/{run["id"]}/results?include_reviewed=true', headers=owner).json()
+    updated = next(r for r in rows if r['item_id'] == item['id'])
+    assert not updated['pending_review'] and updated['status'] == 'passed'
+    assert (updated['ai_threshold'], updated['ai_value']) == ('25', '21')
+    assert updated['id'] == pending['id']
+    assert updated['raw'] == {'ai_threshold':'25', 'ai_value':'21', 'result':'通过'}
+    assert any(r['ai_value'] == '旧值' for r in rows)
