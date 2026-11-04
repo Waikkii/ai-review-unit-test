@@ -93,10 +93,11 @@ def process_once():
                       "evidence": [], "suggestion": "请联系管理员处理后重新登录。",
                       "raw": {"error_type": "SessionAuthFailure"}}
         except Exception as exc:
-            # 不把 HTTP 请求、响应或凭据拼入用户错误及日志。
+            # 页面保留统一提示；异常内容和完整堆栈只写入 Worker 错误日志。
             values = {"status": "error", "explanation": "审查执行失败，请管理员检查集成配置后重新发起批次。",
                       "evidence": [], "suggestion": "", "raw": {"error_type": type(exc).__name__, "response": getattr(exc, "raw", {})}}
-            log.warning("Review failed: result=%s type=%s", result_id, type(exc).__name__)
+            log.exception("Review failed: run=%s result=%s domain=%s type=%s exc=%s",
+                          claimed, result_id, domain, type(exc).__name__, exc)
         with Session() as db:
             # 抢占后旧进程不可写入，即使外部调用延迟返回。
             # SQLite 的 FOR UPDATE 不提供行锁：条件更新同时校验租约并取得写锁，

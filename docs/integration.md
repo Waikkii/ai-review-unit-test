@@ -121,3 +121,5 @@ state 仅允许 pending/reviewed，对应待审查/已审查；revision 和 revi
 网页对 `/runs/{id}/results`、`/result-options` 和 `/export` 使用 `include_reviewed=true`；仅在查漏补缺模式下合并当前批次结果与保留的已审查结果，筛选、分页和导出一致。默认未带参数时仍返回原本批次工作项，保持接口兼容。查漏补缺页面导出包含保留的已审查结果；用户手动标记已审查但没有 AI 结果的项也显示，AI 列保持空白。
 
 测试项和审查结果表格的每个明细列均提供搜索、多选、空白值和清除此列筛选；领域、审查结果筛选移入对应表头。`GET /api/reports/{id}/table-view` 接收可选的 `run_id`、JSON 格式 `filters`、`offset`、`limit`，返回 `items/total/options`。筛选对整份报告生效后再分页，各列选项按其他列的筛选条件联动（自身筛选不缩小自身选项），多列取交集，同列多选取并集，空数组表示不选任何值。键为 `domain`、`field:原始列名`、`ai_threshold`、`ai_value`、`result`、`note`、`state`、`keyword`；空白值使用空字符串。审查页面读取状态后再请求此完整表格视图，导出仍导出完整批次。
+
+审查函数抛出异常时，Worker 以 ERROR 级别记录 `Review failed`，包含 run（批次号）、result（结果号）、domain（领域）、type（异常类型）、exc（异常内容）及完整异常堆栈。堆栈中的 `File "路径", line 行号, in 函数名` 可定位本地审查函数的出错位置，并保留异常原因链。Windows 启动器写入 `data/launcher/worker.err.log`（自定义端口为 `data/launcher/<端口>/worker.err.log`）；使用 `Get-Content .\data\launcher\worker.err.log -Tail 100 -Wait` 实时查看。网页仍显示统一失败提示，不把这些诊断内容额外存入数据库。更新后需要重启 Worker；历史异常不会补打。
