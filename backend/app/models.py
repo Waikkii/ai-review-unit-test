@@ -74,6 +74,14 @@ class Result(Base):
     raw: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("run_id", "item_id"),)
 
+class RunRetainedItem(Base):
+    """查漏补缺的已审查项快照，仅保存引用，不重复保存结果或加入工作队列。"""
+    __tablename__ = "run_retained_items"
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    result_id: Mapped[str | None] = mapped_column(ForeignKey("results.id"), nullable=True, index=True)
+
+
 class ResultMeasurements(Base):
     __tablename__ = "result_measurements"
     result_id: Mapped[str] = mapped_column(ForeignKey("results.id"), primary_key=True)

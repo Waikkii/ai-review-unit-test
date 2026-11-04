@@ -112,4 +112,8 @@ state 仅允许 pending/reviewed，对应待审查/已审查；revision 和 revi
 
 `POST /api/runs/{id}/abort` 立即将排队中、审查中、暂停中、已暂停或认证阻塞的批次标记为 `aborted`（已中止），清除 Worker 租约，不创建新批次。中止前已写入的结果保留，未完成项继续待审查；该历史随后可删除，原始报告也可删除（前提是没有其他活动批次）。已发出的外部请求可能自行返回，但 Worker 在领取下一项和写回结果前均通过租约及状态条件更新隔离旧调用，批次或报告被删除后也不会补写结果或恢复记录。中止后不能继续原批次，可按当前选择模式重新开始；重复中止不重复记录操作。页面保留原暂停/继续/重新开始，并在可中止状态下显示“中止”按钮。
 
-网页登录失败自动以 ERROR 级别写入 API 标准错误，Windows 启动脚本重定向到 `data/launcher/api.err.log`（自定义端口为 `data/launcher/<端口>/api.err.log`），不写入 Worker 日志或数据库操作记录。启动器为 API、Worker 设置 PYTHONIOENCODING=utf-8，统一文件日志编码，不改变普通业务文件的默认读取编码；使用 `Get-Content .\data\launcher\api.err.log -Encoding UTF8 -Tail 100 -Wait` 实时查看。无需额外开启调试配置。日志含 UTC 时间、用户名、失败阶段、总耗时、异常类型及原因链、调用位置（文件/行号/函数），异常携带 response.status_code 或 errno 时记录这些数值。阶段包括 demo_credentials、module_load、adapter_login、identity_validate、identity_name、account_status、user_lookup、user_create、session_store、database_commit、token_issue。只输出定位元数据及内置校验信息，不输出密码、Cookie、Token、任意异常原文、源码行、局部变量、HTTP 请求响应或返回认证数据；前端继续显示统一的认证失败提示，服务端处理异常返回通用 500 提示。需要查看登录适配器内部细分步骤时，在本地 login() 中补充脱敏的 logger.error()，同样输出到 API 错误日志。
+查漏补缺页面继续显示整份报告：开始时已审查的项保留原结论、AI 门限和值；只把待审查项加入本批次执行队列。每项每批次执行一次，缺少关键词、执行异常等仍待审查的项在修复原因后再发起查漏补缺，不自动循环重试。进度的 total/completed 仅统计本批次执行项，表格分页总数统计全部展示项。
+
+run_retained_items 为已审查项保存轻量的批次/测试项/原结果引用，不复制 AI 原始数据，不加入 Worker 队列。启动升级会为已有查漏补缺历史补建引用；之后的新批次不会改变旧批次所保留的结果。删除结果来源批次时清空相应引用，删除目标批次或报告时清理引用记录。
+
+网页对 `/runs/{id}/results`、`/result-options` 和 `/export` 使用 `include_reviewed=true`；仅在查漏补缺模式下合并当前批次结果与保留的已审查结果，筛选、分页和导出一致。默认未带参数时仍返回原本批次工作项，保持接口兼容。查漏补缺页面导出包含保留的已审查结果；用户手动标记已审查但没有 AI 结果的项也显示，AI 列保持空白。

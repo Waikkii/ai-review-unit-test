@@ -564,13 +564,13 @@ function App() {
           api<PageData<Result>>(
             "/runs/" +
               run.id +
-              "/results?include_total=true&limit=" +
+              "/results?include_reviewed=true&include_total=true&limit=" +
               pageSize +
               "&offset=" +
               resultPage * pageSize +
               filterQuery(domainFilter, filter),
           ),
-          api<string[]>("/runs/" + run.id + "/result-options"),
+          api<string[]>("/runs/" + run.id + "/result-options?include_reviewed=true"),
         ]);
         if (!cancelled) {
           setRun(r);
@@ -700,7 +700,7 @@ function App() {
       ["a", "b", "c", "d"].every(key => k.payload[key] === next[key as keyof typeof next]));
     if (existing) kwFrom(existing);
     else { setEntry(next); setAction("create"); }
-    setLinkResult(row.result?.id ?? null);
+    setLinkResult(row.result?.id || null);
     setKwReason("审查页面调整关键词");
     setKeywordDialog(true);
   });
@@ -1046,7 +1046,7 @@ function App() {
                           </>}
                           <button disabled={["queued", "running", "pausing", "paused"].includes(run.state) || busy}
                             onClick={() => void act(async () => {
-                              await download("/runs/" + run.id + "/export", "审查结果-" + run.id.slice(0, 8) + ".xlsx");
+                              await download("/runs/" + run.id + "/export?include_reviewed=true", "审查结果-" + run.id.slice(0, 8) + ".xlsx");
                             })}>导出 Excel</button>
                         </div>
                       </div>

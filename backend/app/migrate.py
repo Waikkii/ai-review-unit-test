@@ -3,7 +3,7 @@ from .config import settings
 from .db import engine
 from sqlalchemy import inspect, select, update
 from sqlalchemy.orm import Session
-from .models import ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword
+from .models import ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword, RunRetainedItem
 from .keywords import matching_keywords
 from .services import keyword_dict
 
@@ -11,7 +11,7 @@ from .services import keyword_dict
 def main():
     settings.validate_runtime()
     for table in (ItemNote.__table__, ItemSource.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
-                  ResultWork.__table__, RunControl.__table__, SessionCredential.__table__):
+                  ResultWork.__table__, RunControl.__table__, SessionCredential.__table__, RunRetainedItem.__table__):
         table.create(engine, checkfirst=True)
     indexes = inspect(engine).get_indexes("runs")
     for entry in indexes:
@@ -47,6 +47,16 @@ def main():
                         == sorted(matching_keywords(live, item.current, item.domain), key=key))
                 db.add(ItemReviewState(item_id=item.id, revision=1, reviewed_revision=1 if clean else 0,
                                        source_result_id=source))
+        for run in db.scalars(select(Run).join(RunControl).where(RunControl.selection_mode == "missing")):
+            present = set(db.scalars(select(Result.item_id).where(Result.run_id == run.id)))
+            present.update(db.scalars(select(RunRetainedItem.item_id).where(RunRetainedItem.run_id == run.id)))
+            for item in db.scalars(select(Item).where(Item.report_id == run.report_id)):
+                if item.id in present:
+                    continue
+                previous = db.scalar(select(Result.id).join(Run, Run.id == Result.run_id).where(
+                    Result.item_id == item.id, Run.created_at < run.created_at, Result.status != "pending")
+                    .order_by(Run.created_at.desc(), Result.id).limit(1))
+                db.add(RunRetainedItem(run_id=run.id, item_id=item.id, result_id=previous))
         db.commit()
     print("Schema upgrade complete: review controls, pending items and encrypted sessions.")
 

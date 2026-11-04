@@ -2,7 +2,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from .config import settings
 from .db import uid
-from .models import Item, ItemReviewState, Result, ResultWork, Run, RunControl, Keyword, Report
+from .models import Item, ItemReviewState, Result, ResultWork, Run, RunControl, Keyword, Report, RunRetainedItem
 from .reviewer import rule_version
 from .keywords import ENTRY_DOMAIN, matches_entry
 
@@ -45,6 +45,9 @@ def create_run(db, report, actor, selection_mode):
     db.add(run)
     db.flush()
     db.add(RunControl(run_id=run.id, selection_mode=selection_mode))
+    if selection_mode == "missing":
+        db.add_all([RunRetainedItem(run_id=run.id, item_id=item.id, result_id=state.source_result_id if state else None)
+                    for item, state in candidates if not is_pending(state)])
     for item, state in chosen:
         if state is None:
             state = ItemReviewState(item_id=item.id, revision=1, reviewed_revision=0)

@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 from hashlib import sha256
 import json
 import logging
-import time
 from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query
 from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,10 +9,10 @@ from sqlalchemy import select, update, delete, or_, and_, func
 from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
 from .db import get_db, uid, now
-from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential
+from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential, RunRetainedItem
 from .schemas import Login, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
-from .auth import authenticate, issue_token, current_user, admin_user, AuthenticationFailure, log_login_failure
+from .auth import authenticate, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
@@ -61,44 +60,28 @@ def health():
 
 @app.post("/api/auth/login")
 def login(data: Login, db=Depends(get_db)):
-    started = time.perf_counter()
     try:
         identity = authenticate(data.username, data.password)
         name = identity["username"]
         if not isinstance(name, str) or not name.strip() or len(name) > 128:
             raise ValueError()
-    except Exception as exc:
-        stage = exc.stage if isinstance(exc, AuthenticationFailure) else "identity_name"
-        log_login_failure(stage, data.username, started, exc)
-        raise HTTPException(401, "用户名或密码错误，或内网认证服务不可用") from None
-    stage = "user_lookup"
-    try:
-        user = db.scalar(select(User).where(User.username == name))
-        if user is None:
-            stage = "user_create"
-            admins = {x.strip() for x in settings.bootstrap_admins.split(",") if x.strip()}
-            role = "admin" if name in admins or (settings.app_mode == "demo" and name == "admin") else "user"
-            user = User(username=name, role=role)
-            db.add(user)
-            db.flush()
-        if not user.active:
-            log_login_failure("account_status", data.username, started)
-            raise HTTPException(403, "账号已停用")
-        if "_session_cookies" in identity:
-            stage = "session_store"
-            store_credentials(db, name, data.username, data.password, identity["_session_cookies"])
-        stage = "database_commit"
-        audit(db, user, "session.login", user.id)
-        db.commit()
-        stage = "token_issue"
-        return {"access_token": issue_token(user), "token_type": "bearer",
-                "user": serial(user, "id username role active"), "mode": settings.app_mode}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        log_login_failure(stage, data.username, started, exc)
-        db.rollback()
-        raise HTTPException(500, "登录处理失败，请联系管理员查看 API 日志") from None
+    except Exception:
+        raise HTTPException(401, "用户名或密码错误，或内网认证服务不可用")
+    user = db.scalar(select(User).where(User.username == name))
+    if user is None:
+        admins = {x.strip() for x in settings.bootstrap_admins.split(",") if x.strip()}
+        role = "admin" if name in admins or (settings.app_mode == "demo" and name == "admin") else "user"
+        user = User(username=name, role=role)
+        db.add(user)
+        db.flush()
+    if not user.active:
+        raise HTTPException(403, "账号已停用")
+    if "_session_cookies" in identity:
+        store_credentials(db, name, data.username, data.password, identity["_session_cookies"])
+    audit(db, user, "session.login", user.id)
+    db.commit()
+    return {"access_token": issue_token(user), "token_type": "bearer",
+            "user": serial(user, "id username role active"), "mode": settings.app_mode}
 
 @app.get("/api/auth/me")
 def me(user=Depends(current_user)):
@@ -168,6 +151,7 @@ def clear_report(report_id: str, user=Depends(current_user), db=Depends(get_db))
     # 保留关键词申请，解除到即将删除的结果的关联。
     db.execute(update(ChangeRequest).where(ChangeRequest.result_id.in_(result_ids)).values(result_id=None))
     db.execute(delete(ItemReviewState).where(ItemReviewState.item_id.in_(item_ids)))
+    db.execute(delete(RunRetainedItem).where(RunRetainedItem.run_id.in_(run_ids)))
     for table in (ResultMeasurements, ResultWork):
         db.execute(delete(table).where(table.result_id.in_(result_ids)))
     db.execute(delete(Result).where(Result.run_id.in_(run_ids)))
@@ -373,6 +357,8 @@ def clear_run(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(ACTIVE_STATES))):
         raise HTTPException(409, "报告仍有运行中或暂停中的审查，请在审查结束后删除批次")
     result_ids = select(Result.id).where(Result.run_id == run.id)
+    db.execute(update(RunRetainedItem).where(RunRetainedItem.result_id.in_(result_ids)).values(result_id=None))
+    db.execute(delete(RunRetainedItem).where(RunRetainedItem.run_id == run.id))
     db.execute(update(ChangeRequest).where(ChangeRequest.result_id.in_(result_ids)).values(result_id=None))
     # 删除当前引用的结论后恢复待审查；不改其他批次结论，也不猜测旧结果是否仍有效。
     db.execute(update(ItemReviewState).where(ItemReviewState.source_result_id.in_(result_ids)).values(
@@ -389,9 +375,13 @@ def clear_run(run_id: str, user=Depends(current_user), db=Depends(get_db)):
 @app.get("/api/runs/{run_id}/results")
 def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
             status: list[str] | None = Query(None), domain: list[str] | None = Query(None),
-            result: list[str] | None = Query(None), include_total: bool = False,
+            result: list[str] | None = Query(None), include_total: bool = False, include_reviewed: bool = False,
             user=Depends(current_user), db=Depends(get_db)):
-    visible_run(db, run_id, user)
+    run = visible_run(db, run_id, user)
+    control = db.get(RunControl, run_id)
+    if include_reviewed and control and control.selection_mode == "missing":
+        from .review_display import display_page
+        return display_page(db, run, offset, limit, domain, result, status, include_total)
     q = select(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     q = q.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
     q = q.outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
@@ -434,21 +424,31 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
 
 
 @app.get("/api/runs/{run_id}/result-options")
-def result_options(run_id: str, user=Depends(current_user), db=Depends(get_db)):
-    visible_run(db, run_id, user)
+def result_options(run_id: str, include_reviewed: bool = False, user=Depends(current_user), db=Depends(get_db)):
+    run = visible_run(db, run_id, user)
+    control = db.get(RunControl, run_id)
+    if include_reviewed and control and control.selection_mode == "missing":
+        from .review_display import display_query
+        query, _, label = display_query(run)
+        return list(db.scalars(query.with_only_columns(label).distinct().order_by(label)))
     _, label = effective_result_expressions()
     query = select(label).select_from(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
     return list(db.scalars(query.distinct().order_by(label)))
 
 @app.get("/api/runs/{run_id}/export")
-def export(run_id: str, user=Depends(current_user), db=Depends(get_db)):
+def export(run_id: str, include_reviewed: bool = False, user=Depends(current_user), db=Depends(get_db)):
     run = visible_run(db, run_id, user)
     if run.state in ACTIVE_STATES:
         raise HTTPException(409, "请等待本批次审查结束")
     result_rows = db.scalars(select(Result).where(Result.run_id == run.id).order_by(Result.domain, Result.row_number)).all()
+    control = db.get(RunControl, run_id)
+    if include_reviewed and control and control.selection_mode == "missing":
+        from .review_display import display_query
+        query, _, _ = display_query(run)
+        result_rows = [row[1] for row in db.execute(query) if row[1] is not None]
     measurements = {m.result_id: m for m in db.scalars(select(ResultMeasurements).join(Result)
-        .where(Result.run_id == run.id))}
+        .where(Result.id.in_([r.id for r in result_rows])))}
     notes = {n.item_id: n.note for n in db.scalars(select(ItemNote).join(Item)
         .where(Item.report_id == run.report_id))}
     sources = {s.item_id: s.group_index for s in db.scalars(select(ItemSource).join(Item)
