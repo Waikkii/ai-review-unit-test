@@ -6,12 +6,13 @@ from sqlalchemy.orm import Session
 from .models import ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword, RunRetainedItem
 from .keywords import matching_keywords
 from .services import keyword_dict
+from .models import RunItemReviewState
 
 
 def main():
     settings.validate_runtime()
     for table in (ItemNote.__table__, ItemSource.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
-                  ResultWork.__table__, RunControl.__table__, SessionCredential.__table__, RunRetainedItem.__table__):
+                  ResultWork.__table__, RunControl.__table__, SessionCredential.__table__, RunRetainedItem.__table__, RunItemReviewState.__table__):
         table.create(engine, checkfirst=True)
     indexes = inspect(engine).get_indexes("runs")
     for entry in indexes:
@@ -59,6 +60,8 @@ def main():
                 db.add(RunRetainedItem(run_id=run.id, item_id=item.id, result_id=previous))
         from .review_workflow import detach_retained_results
         detach_retained_results(db)
+        from .history_state import seed_history_states
+        seed_history_states(db)
         db.commit()
     print("Schema upgrade complete: review controls, pending items and encrypted sessions.")
 

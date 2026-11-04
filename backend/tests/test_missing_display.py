@@ -92,7 +92,7 @@ def test_selected_history_is_independent_of_newer_history_and_deletion(client, h
     assert process_once()
     item = client.get(base + '/items', headers=h).json()[-1]
     client.patch(f'/api/items/{item["id"]}/review-state', headers=h,
-        json={'state':'pending', 'revision':item['review_revision'], 'reviewed_revision':item['reviewed_revision']})
+        json={'state':'pending', 'revision':item['review_revision'], 'reviewed_revision':item['reviewed_revision'], 'run_id':first['id']})
     url = f'/api/runs/{first["id"]}/restart' if restart else base + '/runs'
     response = client.post(url, headers=h, json={'selection_mode':'missing', 'base_run_id':first['id']})
     assert response.status_code in (200, 201), response.text

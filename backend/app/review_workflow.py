@@ -2,7 +2,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from .config import settings
 from .db import uid
-from .models import Item, ItemReviewState, Result, ResultWork, ResultMeasurements, Run, RunControl, Keyword, Report, RunRetainedItem
+from .models import Item, ItemReviewState, Result, ResultWork, ResultMeasurements, Run, RunControl, Keyword, Report, RunRetainedItem, RunItemReviewState
 from .reviewer import rule_version
 from .keywords import ENTRY_DOMAIN, matches_entry
 
@@ -67,17 +67,19 @@ def create_run(db, report, actor, selection_mode, base_run=None):
         ItemReviewState.item_id == Item.id).where(Item.report_id == report.id)
         .order_by(Item.domain, Item.row_number)).all()
     baseline = None
+    baseline_states = {}
     if selection_mode == "missing" and base_run:
         from .review_display import display_query
         query, _, _ = display_query(base_run)
         baseline = {row[0].id: row[1] for row in db.execute(query)}
+        baseline_states = {state.item_id: state for state in db.scalars(select(RunItemReviewState).where(RunItemReviewState.run_id == base_run.id))}
     def needs_review(item, state):
-        if is_pending(state):
-            return True
         if baseline is None:
-            return False
+            return is_pending(state)
+        if item.id in baseline_states:
+            return baseline_states[item.id].pending
         source = baseline.get(item.id)
-        return source.status in {'pending', 'error', 'missing_keyword'} if source else bool(state.source_result_id)
+        return source.status in {'pending', 'error', 'missing_keyword'} if source else is_pending(state)
     chosen = [(item, state) for item, state in candidates if selection_mode == "full" or needs_review(item, state)]
     chosen_ids = {item.id for item, _ in chosen}
     if not chosen:
@@ -97,6 +99,7 @@ def create_run(db, report, actor, selection_mode, base_run=None):
             source = baseline.get(item.id) if baseline is not None else db.get(Result, state.source_result_id) if state and state.source_result_id else None
             result_id = retain_result(db, run.id, item.id, source, activate=True)
             db.add(RunRetainedItem(run_id=run.id, item_id=item.id, result_id=result_id))
+            db.add(RunItemReviewState(run_id=run.id, item_id=item.id, pending=False, stale=False))
     for item, state in chosen:
         if state is None:
             state = ItemReviewState(item_id=item.id, revision=1, reviewed_revision=0)
@@ -108,6 +111,7 @@ def create_run(db, report, actor, selection_mode, base_run=None):
         db.add(result)
         db.flush()
         db.add(ResultWork(result_id=result.id, item_revision=state.revision))
+        db.add(RunItemReviewState(run_id=run.id, item_id=item.id, pending=True, stale=False))
     audit(db, actor, "run.start", run.id, after={"report_id": report.id, "selection_mode": selection_mode,
           "revision": run.revision, "model": run.model, "rule_version": run.rule_version,
           "filename": report.filename})
@@ -123,6 +127,9 @@ def invalidate_keyword_items(db, keyword):
         for offset in range(0, len(ids), 500):
             db.execute(update(ItemReviewState).where(ItemReviewState.item_id.in_(ids[offset:offset + 500]))
                        .values(revision=ItemReviewState.revision + 1))
+            db.execute(update(RunItemReviewState).where(RunItemReviewState.item_id.in_(ids[offset:offset + 500])).values(pending=True, stale=True))
     else:
         db.execute(update(ItemReviewState).where(ItemReviewState.item_id.in_(
             select(Item.id).where(Item.domain == keyword.domain))).values(revision=ItemReviewState.revision + 1))
+        db.execute(update(RunItemReviewState).where(RunItemReviewState.item_id.in_(
+            select(Item.id).where(Item.domain == keyword.domain))).values(pending=True, stale=True))

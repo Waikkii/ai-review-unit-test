@@ -18,6 +18,8 @@ from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
 from .audit_view import SUMMARY_ACTIONS, describe_activity
 from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, work_results, run_json as workflow_run_json
+from .models import RunItemReviewState
+from .history_state import pending_expression, is_history_pending
 from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE
 from .result_filters import effective_result_expressions
 
@@ -152,6 +154,7 @@ def clear_report(report_id: str, user=Depends(current_user), db=Depends(get_db))
     db.execute(update(ChangeRequest).where(ChangeRequest.result_id.in_(result_ids)).values(result_id=None))
     db.execute(delete(ItemReviewState).where(ItemReviewState.item_id.in_(item_ids)))
     db.execute(delete(RunRetainedItem).where(RunRetainedItem.run_id.in_(run_ids)))
+    db.execute(delete(RunItemReviewState).where(RunItemReviewState.run_id.in_(run_ids)))
     for table in (ResultMeasurements, ResultWork):
         db.execute(delete(table).where(table.result_id.in_(result_ids)))
     db.execute(delete(Result).where(Result.run_id.in_(run_ids)))
@@ -268,6 +271,16 @@ def edit_review_state(item_id: str, data: ReviewStateEdit, user=Depends(current_
     if (data.revision, data.reviewed_revision) != (state.revision, state.reviewed_revision):
         raise HTTPException(409, "审查状态已变化，请刷新后重试")
     before = {"revision": state.revision, "reviewed_revision": state.reviewed_revision}
+    history = visible_run(db, data.run_id, user) if data.run_id else db.get(Run, db.get(Result, state.source_result_id).run_id) if state.source_result_id else None
+    if history and history.report_id != report.id:
+        raise HTTPException(409, "审查历史不属于当前报告")
+    if history:
+        snapshot = db.get(RunItemReviewState, (history.id, item_id))
+        if snapshot is None:
+            snapshot = RunItemReviewState(run_id=history.id, item_id=item_id)
+            db.add(snapshot)
+        snapshot.pending = data.state == "pending"
+        snapshot.stale = data.state == "pending"
     values = {"revision": state.revision + 1} if data.state == "pending" else {"reviewed_revision": state.revision}
     updated = db.execute(update(ItemReviewState).where(ItemReviewState.item_id == item_id,
         ItemReviewState.revision == data.revision, ItemReviewState.reviewed_revision == data.reviewed_revision).values(**values))
@@ -383,6 +396,7 @@ def clear_run(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     result_ids = select(Result.id).where(Result.run_id == run.id)
     db.execute(update(RunRetainedItem).where(RunRetainedItem.result_id.in_(result_ids)).values(result_id=None))
     db.execute(delete(RunRetainedItem).where(RunRetainedItem.run_id == run.id))
+    db.execute(delete(RunItemReviewState).where(RunItemReviewState.run_id == run.id))
     db.execute(update(ChangeRequest).where(ChangeRequest.result_id.in_(result_ids)).values(result_id=None))
     # 删除当前引用的结论后恢复待审查；不改其他批次结论，也不猜测旧结果是否仍有效。
     db.execute(update(ItemReviewState).where(ItemReviewState.source_result_id.in_(result_ids)).values(
@@ -409,11 +423,12 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
     q = select(Result).where(work_results()).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     q = q.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
     q = q.outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
-    _, result_label = effective_result_expressions()
+    q = q.outerjoin(RunItemReviewState, (RunItemReviewState.run_id == run_id) & (RunItemReviewState.item_id == Result.item_id))
+    _, result_label = effective_result_expressions(historical=True)
     if status:
         # 兼容既有状态筛选：缺少关键词也属于可补审的 pending 工作。
-        pending = or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
-        stale = ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)
+        pending = pending_expression()
+        stale = func.coalesce(RunItemReviewState.stale, False)
         conditions = []
         for selected_status in status:
             if selected_status == "pending":
@@ -428,7 +443,7 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
     if domain:
         q = q.where(Result.domain.in_(domain))
     total = db.scalar(select(func.count()).select_from(q.subquery())) if include_total else None
-    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork, result_label, ItemSource)
+    rows = db.execute(q.with_only_columns(Result, ResultMeasurements, ItemNote, ItemReviewState, ResultWork, result_label, ItemSource, RunItemReviewState)
         .outerjoin(ResultMeasurements, ResultMeasurements.result_id == Result.id)
         .outerjoin(ItemNote, ItemNote.item_id == Result.item_id)
         .order_by(Result.domain, Result.row_number, func.coalesce(ItemSource.group_index, 0), Result.id).offset(offset).limit(limit))
@@ -436,14 +451,14 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
              "ai_threshold": measured.ai_threshold if measured else "",
              "ai_value": measured.ai_value if measured else "",
              "note": note.note if note else "", "note_version": note.version if note else 0,
-             "pending_review": is_pending(state),
+             "pending_review": is_history_pending(snapshot, r),
              "review_revision": state.revision if state else 1,
              "reviewed_revision": state.reviewed_revision if state else 0,
              "source_group": source.group_index if source else 0,
              "source_label": source.group_label if source else "",
              "result_label": label,
-             "stale": bool(state and state.revision > (work.item_revision if work else 1))}
-            for r, measured, note, state, work, label, source in rows]
+             "stale": bool(snapshot and snapshot.stale)}
+            for r, measured, note, state, work, label, source, snapshot in rows]
     return {"items": data, "total": total} if include_total else data
 
 
@@ -455,9 +470,10 @@ def result_options(run_id: str, include_reviewed: bool = False, user=Depends(cur
         from .review_display import display_query
         query, _, label = display_query(run)
         return list(db.scalars(query.with_only_columns(label).distinct().order_by(label)))
-    _, label = effective_result_expressions()
+    _, label = effective_result_expressions(historical=True)
     query = select(label).select_from(Result).where(work_results()).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
+    query = query.outerjoin(RunItemReviewState, (RunItemReviewState.run_id == run_id) & (RunItemReviewState.item_id == Result.item_id))
     return list(db.scalars(query.distinct().order_by(label)))
 
 @app.get("/api/runs/{run_id}/export")

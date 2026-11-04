@@ -3,7 +3,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 
 from app.db import Session
-from app.models import ItemReviewState, Result, Run
+from app.models import ItemReviewState, Result, Run, RunItemReviewState
 from app.schemas import COLUMNS
 
 
@@ -33,6 +33,9 @@ def batch(client, headers):
                           .order_by(Result.domain, Result.row_number)).all()
         for row, (status, explanation) in zip(rows, statuses):
             row.status, row.explanation = status, explanation
+            snapshot = db.get(RunItemReviewState, (run['id'], row.item_id))
+            snapshot.pending = status in {'pending', 'missing_keyword', 'error'}
+            snapshot.stale = False
             state = db.get(ItemReviewState, row.item_id)
             if status not in {"pending", "missing_keyword", "error"}:
                 state.reviewed_revision = state.revision
@@ -94,6 +97,9 @@ def test_invalidated_results_move_to_pending_filter(client, headers):
         row = db.scalar(select(Result).where(Result.run_id == run["id"], Result.status == "failed"))
         state = db.get(ItemReviewState, row.item_id)
         state.revision += 1
+        # Historical filtering uses the batch-owned state, not the report's current state.
+        snapshot = db.get(RunItemReviewState, (run['id'], row.item_id))
+        snapshot.pending, snapshot.stale = True, True
         db.commit()
     endpoint = f'/api/runs/{run["id"]}/results'
     assert client.get(endpoint, headers=h, params={"result": "电压判断错误。"}).json() == []

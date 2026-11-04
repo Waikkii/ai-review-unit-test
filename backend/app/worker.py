@@ -11,6 +11,7 @@ from .reviewer import review, rule_version
 from .services import audit
 from .keywords import matching_keywords
 from .review_workflow import work_results
+from .models import RunItemReviewState
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +120,14 @@ def process_once():
                 db.add(ResultMeasurements(result_id=result.id, ai_threshold=threshold, ai_value=measured))
                 for key, value in values.items():
                     setattr(result, key, value)
+                state = db.get(ItemReviewState, result.item_id)
+                stale = bool(state and state.revision != item_revision)
+                snapshot = db.get(RunItemReviewState, (claimed, result.item_id))
+                if snapshot is None:
+                    snapshot = RunItemReviewState(run_id=claimed, item_id=result.item_id)
+                    db.add(snapshot)
+                snapshot.pending = stale or result.status in ('error', 'missing_keyword')
+                snapshot.stale = stale
                 locked.completed += 1
                 if result.status == "error":
                     locked.failed += 1

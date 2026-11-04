@@ -89,6 +89,15 @@ class ResultMeasurements(Base):
     ai_value: Mapped[str] = mapped_column(Text, default="")
 
 
+class RunItemReviewState(Base):
+    """History owns its review eligibility; deleting another run cannot invalidate it."""
+    __tablename__ = "run_item_review_states"
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
+    item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)
+    pending: Mapped[bool] = mapped_column(Boolean, default=True)
+    stale: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class ItemNote(Base):
     __tablename__ = "item_notes"
     item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)

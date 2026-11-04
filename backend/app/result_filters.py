@@ -1,6 +1,6 @@
 """Shared effective result labels for display and filtering before pagination."""
 from sqlalchemy import and_, case, func, or_
-from .models import ItemReviewState, Result, ResultWork
+from .models import ItemReviewState, Result, ResultWork, RunItemReviewState
 
 def stored_result_label(status, explanation):
     labels = {"passed": "通过", "failed": "未通过", "needs_review": "待人工确认",
@@ -11,9 +11,10 @@ def stored_result_label(status, explanation):
     return labels.get(status, status) if not detail or detail == status else detail
 
 
-def effective_result_expressions():
-    pending = or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
-    stale = ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)
+def effective_result_expressions(historical=False):
+    from .history_state import pending_expression
+    pending = pending_expression() if historical else or_(ItemReviewState.item_id.is_(None), ItemReviewState.reviewed_revision < ItemReviewState.revision)
+    stale = func.coalesce(RunItemReviewState.stale, False) if historical else ItemReviewState.revision > func.coalesce(ResultWork.item_revision, 1)
     effective_pending = or_(Result.status == "pending", and_(pending,
         or_(Result.status.not_in(("error", "missing_keyword")), stale)))
     status = case((effective_pending, "pending"), else_=Result.status)

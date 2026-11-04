@@ -680,7 +680,7 @@ function App() {
     ["测试对象", "用例编号", "用例名称", "测试小项"].map(label => row.fields[label] ?? "")));
   const changeReviewState = (row: ReviewRow, state: string) => act(async () => {
     await api(`/items/${row.itemId}/review-state`, { method: "PATCH",
-      body: json({ state, revision: row.reviewRevision, reviewed_revision: row.reviewedRevision }) });
+      body: json({ state, revision: row.reviewRevision, reviewed_revision: row.reviewedRevision, run_id: run?.id ?? null }) });
     runViewVersion.current += 1;
     setReviewRefresh(value => value + 1);
   }, true);

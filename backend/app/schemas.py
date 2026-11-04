@@ -35,6 +35,7 @@ class ReviewStateEdit(StrictModel):
     state: Literal["pending", "reviewed"]
     revision: int = Field(ge=1)
     reviewed_revision: int = Field(ge=0)
+    run_id: str | None = None
 
 
 class StartReview(StrictModel):
