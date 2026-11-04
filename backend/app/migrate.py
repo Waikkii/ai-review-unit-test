@@ -57,6 +57,8 @@ def main():
                     Result.item_id == item.id, Run.created_at < run.created_at, Result.status != "pending")
                     .order_by(Run.created_at.desc(), Result.id).limit(1))
                 db.add(RunRetainedItem(run_id=run.id, item_id=item.id, result_id=previous))
+        from .review_workflow import detach_retained_results
+        detach_retained_results(db)
         db.commit()
     print("Schema upgrade complete: review controls, pending items and encrypted sessions.")
 

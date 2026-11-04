@@ -39,6 +39,7 @@ class ReviewStateEdit(StrictModel):
 
 class StartReview(StrictModel):
     selection_mode: Literal["full", "missing"] = "full"
+    base_run_id: str | None = None
 
 
 class KeywordChange(StrictModel):

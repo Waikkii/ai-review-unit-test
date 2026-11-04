@@ -1,4 +1,4 @@
-"""查漏补缺的整份报告视图：旧结论只引用，Worker 仍只处理本批次待审查结果。"""
+"""查漏补缺的整份报告视图：包含独立继承的结论，Worker 只处理本轮待审查项。"""
 from sqlalchemy import select, func
 from .models import Item, Result, RunRetainedItem, ResultWork, ResultMeasurements, ItemReviewState, ItemNote, ItemSource
 from .result_filters import effective_result_expressions

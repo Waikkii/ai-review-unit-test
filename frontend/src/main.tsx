@@ -5,6 +5,7 @@ import "./style.css";
 
 type User = { id: string; username: string; role: string; active: boolean };
 type PageData<T> = { items: T[]; total: number };
+type TableData<T> = PageData<T> & { options: Record<string, string[]> };
 type Report = {
   id: string;
   owner_id: string;
@@ -274,7 +275,7 @@ function AttachmentLinks({ value }: { value: string }) {
     </a>)}</div>;
 }
 
-const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable }: { itemId: string; note: string; version: number; editable: boolean }) {
+const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable, onSaved }: { itemId: string; note: string; version: number; editable: boolean; onSaved: () => void }) {
   const [draft, setDraft] = useState(note);
   const [saved, setSaved] = useState(note);
   const [baseVersion, setBaseVersion] = useState(version);
@@ -318,6 +319,7 @@ const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable 
           method: "PATCH", body: json({ note: value, version: baseVersion }),
         });
         setSaved(updated.note); setDraft(updated.note); setBaseVersion(updated.version); setEditing(false);
+        onSaved();
       } catch (e) { setError((e as Error).message); }
       finally { setSaving(false); }
   };
@@ -339,32 +341,6 @@ const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable 
   </div>, document.body)}
   </>;
 });
-function MultiSelect({ label, allLabel, options, value, onChange }: {
-  label: string; allLabel: string; options: string[]; value: string[]; onChange: (value: string[]) => void;
-}) {
-  const choices = Array.from(new Set([...options, ...value]));
-  const summary = value.length ? value.length <= 2 ? value.join("、") : `已选 ${value.length} 项` : allLabel;
-  return <details className="multi-select">
-    <summary aria-label={label} title={value.length ? value.join("、") : allLabel}>{summary}</summary>
-    <div className="multi-select-panel" role="group" aria-label={label + "选项"}>
-      <button type="button" onClick={() => onChange([])}>清除选择（显示全部）</button>
-      {choices.map(option => <label key={option}>
-        <input type="checkbox" checked={value.includes(option)} onChange={event =>
-          onChange(event.target.checked ? [...value, option] : value.filter(item => item !== option))} />
-        <span>{option}</span>
-      </label>)}
-      {!choices.length && <span className="muted small">暂无选项</span>}
-    </div>
-  </details>;
-}
-
-function filterQuery(domains: string[], results: string[] = []) {
-  const params = new URLSearchParams();
-  domains.forEach(domain => params.append("domain", domain));
-  results.forEach(result => params.append("result", result));
-  return params.size ? "&" + params.toString() : "";
-}
-
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
@@ -382,11 +358,11 @@ function App() {
     [run, setRun] = useState<Run | null>(null),
     [results, setResults] = useState<Result[]>([]);
   const [itemPage, setItemPage] = useState(0),
-    [resultPage, setResultPage] = useState(0),
-    [filter, setFilter] = useState<string[]>([]);
+    [resultPage, setResultPage] = useState(0);
   const [pageSize, setPageSize] = useState(100);
   const [itemTotal, setItemTotal] = useState(0), [resultTotal, setResultTotal] = useState(0);
-  const [resultOptions, setResultOptions] = useState<string[]>([]);
+  const [tableFilters, setTableFilters] = useState<Record<string, string[] | undefined>>({});
+  const [tableOptions, setTableOptions] = useState<Record<string, string[]>>({});
   const [reportPage, setReportPage] = useState(0),
     [changePage, setChangePage] = useState(0),
     [auditPage, setAuditPage] = useState(0);
@@ -394,13 +370,12 @@ function App() {
     [changes, setChanges] = useState<Change[]>([]),
     [users, setUsers] = useState<User[]>([]),
     [audit, setAudit] = useState<Audit[]>([]);
-  const [domains, setDomains] = useState<string[]>([]),
-    [domainFilter, setDomainFilter] = useState<string[]>([]),
-    [reviewMode, setReviewMode] = useState<"full" | "missing">("full"),
+  const [reviewMode, setReviewMode] = useState<"full" | "missing">("full"),
     [authAlert, setAuthAlert] = useState("");
   const [verdictDetail, setVerdictDetail] = useState<Result | null>(null);
   const [keywordDialog, setKeywordDialog] = useState(false);
   const [reviewRefresh, setReviewRefresh] = useState(0);
+  const refreshNotes = React.useCallback(() => setReviewRefresh(value => value + 1), []);
   const runViewVersion = useRef(0);
   const itemsQuery = useRef("");
   const keywordIndex = useMemo(() => new Map(keywords.filter(k => k.domain === entryDomain).map(k =>
@@ -496,24 +471,25 @@ function App() {
     load().catch((e) => setError(e.message));
   }, [user, tab, changePage, auditPage]);
   useEffect(() => {
-    if (!selected || tab !== "reports") return;
+    if (!selected || tab !== "reports" || run) return;
     let cancelled = false;
     // Background refreshes must keep the existing rows mounted and preserve scroll.
-    const query = json([selected.id, itemPage, pageSize, domainFilter]);
+    const query = json([selected.id, itemPage, pageSize, tableFilters]);
     if (itemsQuery.current !== query) setItems([]);
     itemsQuery.current = query;
-    api<PageData<Item>>(
+    api<TableData<Item>>(
       "/reports/" +
         selected.id +
-        "/items?include_total=true&limit=" +
+        "/table-view?filters=" + encodeURIComponent(json(tableFilters)) + "&limit=" +
         pageSize +
         "&offset=" +
-        itemPage * pageSize + filterQuery(domainFilter),
+        itemPage * pageSize,
     )
       .then((v) => {
         if (!cancelled) {
           const lastPage = Math.max(0, Math.ceil(v.total / pageSize) - 1);
           setItemTotal(v.total);
+          setTableOptions(v.options);
           if (itemPage > lastPage) setItemPage(lastPage);
           else setItems(v.items);
         }
@@ -522,14 +498,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, itemPage, pageSize, domainFilter, tab, run?.state, reviewRefresh]);
-  useEffect(() => {
-    if (!selected) return;
-    let cancelled = false;
-    api<string[]>(`/reports/${selected.id}/domains`).then(v => { if (!cancelled) setDomains(v); })
-      .catch(e => { if (!cancelled) setError(e.message); });
-    return () => { cancelled = true; };
-  }, [selected?.id]);
+  }, [selected, itemPage, pageSize, tableFilters, tab, run?.id, reviewRefresh]);
   useEffect(() => {
     if (run?.state === "blocked" && run.error_code === "auth_session_failed") setAuthAlert(run.error_message);
   }, [run?.id, run?.state, run?.error_code, run?.error_message]);
@@ -565,25 +534,20 @@ function App() {
         // 先读状态：若批次已结束，后续结果查询必须发生在该次提交之后。
         const r = await api<Run>("/runs/" + run.id);
         if (cancelled || viewVersion !== runViewVersion.current) return;
-        const [rows, options] = await Promise.all([
-          api<PageData<Result>>(
-            "/runs/" +
-              run.id +
-              "/results?include_reviewed=true&include_total=true&limit=" +
+        const rows = await api<TableData<Result>>(
+            "/reports/" + run.report_id +
+              "/table-view?run_id=" + run.id + "&filters=" + encodeURIComponent(json(tableFilters)) + "&limit=" +
               pageSize +
               "&offset=" +
-              resultPage * pageSize +
-              filterQuery(domainFilter, filter),
-          ),
-          api<string[]>("/runs/" + run.id + "/result-options?include_reviewed=true"),
-        ]);
+              resultPage * pageSize,
+          );
         if (!cancelled && viewVersion === runViewVersion.current) {
           setRun(r);
           const lastPage = Math.max(0, Math.ceil(rows.total / pageSize) - 1);
           setResultTotal(rows.total);
           if (resultPage > lastPage) setResultPage(lastPage);
           else setResults(rows.items);
-          setResultOptions(options);
+          setTableOptions(rows.options);
         }
       } catch (e) {
         if (!cancelled && viewVersion === runViewVersion.current) setError((e as Error).message);
@@ -597,7 +561,7 @@ function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [run?.id, run?.state, resultPage, pageSize, filter, domainFilter, tab, reviewRefresh]);
+  }, [run?.id, run?.state, resultPage, pageSize, tableFilters, tab, reviewRefresh]);
   const pager = (page: number, setPage: (n: number) => void, count: number) => (
     <div className="pager">
       <button disabled={page === 0} onClick={() => setPage(page - 1)}>
@@ -614,10 +578,9 @@ function App() {
     setSelected(r);
     setRun(null);
     setResults([]);
-    setDomainFilter([]); setDomains([]); setAuthAlert(""); setResultOptions([]);
+    setTableFilters({}); setTableOptions({}); setAuthAlert("");
     setItemPage(0);
     setResultPage(0);
-    setFilter([]);
   };
   const deleteReport = (report: Report) => {
     if (!window.confirm(`删除“${report.filename}”？将永久删除原始 Excel、全部审查批次、结果和备注。此操作无法撤销。`)) return;
@@ -638,7 +601,7 @@ function App() {
     void act(async () => {
       await api(`/runs/${history.id}`, { method: "DELETE" });
       setRuns(previous => previous.filter(r => r.id !== history.id));
-      if (run?.id === history.id) { runViewVersion.current += 1; setRun(null); setResults([]); setFilter([]); setResultOptions([]); setItemPage(0); }
+      if (run?.id === history.id) { runViewVersion.current += 1; setRun(null); setResults([]); setTableFilters({}); setTableOptions({}); setItemPage(0); }
       setReviewRefresh(value => value + 1);
       setNotice("已删除该审查批次及其结果");
     });
@@ -649,7 +612,7 @@ function App() {
     setRun(r);
     setReviewMode(r.selection_mode ?? "full");
     setResultPage(0);
-    setFilter([]); setResultOptions([]);
+    setTableFilters({}); setTableOptions({});
   };
   const controlRun = (operation: "pause" | "resume" | "restart" | "abort") => act(async () => {
     if (!run) return;
@@ -729,6 +692,10 @@ function App() {
         pendingReview: i.pending_review, reviewRevision: i.review_revision, reviewedRevision: i.reviewed_revision,
         noteVersion: i.note_version, item: i, result: i.review ? { ...i.review, pending_review: i.pending_review } : undefined }));
 
+  const columnHeading = (key: string, label: string, filterLabel = label) => <div className="review-column-heading"><span>{label}</span>
+    <ColumnFilter label={filterLabel} options={tableOptions[key] ?? []} value={tableFilters[key]}
+      onChange={value => { setTableFilters(previous => ({ ...previous, [key]: value })); setItemPage(0); setResultPage(0); }} />
+  </div>;
   const reviewTable = () => <div className="review-scroll" aria-label="测试详情表格">
     <table className="review-table">
       <colgroup>
@@ -736,14 +703,14 @@ function App() {
       </colgroup>
       <thead>
         <tr className="review-groups">
-          <th rowSpan={2} className="domain-cell">领域</th>
+          <th rowSpan={2} className="domain-cell">{columnHeading("domain", "领域")}</th>
           <th colSpan={reportColumns.length}>原始测试详情</th>
           <th colSpan={4} className="ai-group">AI 审查</th>
-          <th rowSpan={2}>当前状态</th><th rowSpan={2} className="row-actions">关键词</th>
+          <th rowSpan={2}>{columnHeading("state", "当前状态")}</th><th rowSpan={2} className="row-actions">{columnHeading("keyword", "关键词")}</th>
         </tr>
-        <tr>{reportColumns.map(c => <th key={c}>{c}</th>)}
-          <th className="ai-cell">门限</th><th className="ai-cell">值</th>
-          <th className="ai-cell">结果</th><th className="ai-cell">备注</th>
+        <tr>{reportColumns.map(c => <th key={c}>{columnHeading("field:" + c, c, "原始" + c)}</th>)}
+          <th className="ai-cell">{columnHeading("ai_threshold", "门限", "AI门限")}</th><th className="ai-cell">{columnHeading("ai_value", "值", "AI值")}</th>
+          <th className="ai-cell">{columnHeading("result", "结果", "审查结果")}</th><th className="ai-cell">{columnHeading("note", "备注", "用户备注")}</th>
         </tr>
       </thead>
       <tbody>{tableRows.map(row => {
@@ -761,7 +728,7 @@ function App() {
             className={`verdict-button verdict-${status}`} onClick={() => setVerdictDetail(r)}
             title="查看审查依据和建议">{r.result_label || (status === "needs_review" ? "待确认" : labels[status])}</button>}</td>
           <td className="ai-cell"><NoteCell itemId={row.itemId} note={row.note ?? ""}
-            version={row.noteVersion ?? 0} editable={canEdit && !uploading} /></td>
+            version={row.noteVersion ?? 0} editable={canEdit && !uploading} onSaved={refreshNotes} /></td>
           <td>{canEdit ? <select className={`review-state-select ${row.pendingReview ? "review-pending" : "review-done"}`} aria-label="修改审查状态"
             value={row.pendingReview ? "pending" : "reviewed"}
             disabled={busy || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
@@ -1006,7 +973,7 @@ function App() {
                               void act(async () => {
                                 const r = await api<Run>(
                                   "/reports/" + selected.id + "/runs",
-                                  { method: "POST", body: json({ selection_mode: reviewMode }) },
+                                  { method: "POST", body: json({ selection_mode: reviewMode, base_run_id: run?.id ?? null }) },
                                 );
                                 chooseRun(r);
                                 setNotice("审查已提交，等待后台进程执行");
@@ -1043,8 +1010,6 @@ function App() {
                       </div>
                       <progress max={run.total || 1} value={run.completed} />
                       <div className="section-head">
-                        <MultiSelect label="筛选审查结果" allLabel="全部审查结果" options={resultOptions}
-                          value={filter} onChange={value => { setFilter(value); setResultPage(0); }} />
                         <div className="actions">
                           <button onClick={() => { runViewVersion.current += 1; setItemPage(0); setRun(null); }}>查看全部测试项</button>
                           {selected.owner_id === user.id && <>
@@ -1062,11 +1027,11 @@ function App() {
                         </div>
                       </div>
                     </>}
-                    <div className="domain-filter">
-                      <span>领域</span><MultiSelect label="领域筛选" allLabel="全部领域" options={domains}
-                        value={domainFilter} onChange={value => { setDomainFilter(value); setItemPage(0); setResultPage(0); }} />
+                    <div className="section-head"><h3>{run ? "审查结果" : "测试项"}</h3>
+                      {Object.values(tableFilters).some(value => value !== undefined) && <button onClick={() => {
+                        setTableFilters({}); setItemPage(0); setResultPage(0);
+                      }}>清除全部筛选</button>}
                     </div>
-                    <h3>{run ? "审查结果" : "测试项"}</h3>
                     {reviewTable()}
                     <div className="pager item-pager">
                       <label>每页 <select aria-label="每页测试项数" value={pageSize} onChange={e => {

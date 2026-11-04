@@ -390,6 +390,8 @@ dd {
   table-layout: fixed;
   font-size: 12px;
   line-height: 1.55;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 .review-table th,
 .review-table td {
@@ -487,17 +489,22 @@ dd {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.review-table thead th {
+.review-table thead {
   position: sticky;
-  top: 36px;
-  z-index: 2;
+  top: 0;
+  z-index: 3;
+  background: #f2f7f8;
+}
+.review-table thead th {
+  position: static;
 }
 .review-table .review-groups th {
-  top: 0;
-  height: 36px;
   padding: 7px 4px;
   vertical-align: middle;
 }
+.review-column-heading { display: flex; align-items: center; justify-content: center; gap: 1px; white-space: normal; }
+.review-column-heading > span { min-width: 0; }
+.review-table thead .column-filter-trigger { width: 14px; min-width: 14px; flex: 0 0 14px; padding: 2px 0; border: 0; font-size: 11px; }
 .review-table .ai-cell,
 .review-table .ai-group {
   background: #f8fbfa;

@@ -10,14 +10,15 @@ from .auth_sessions import SessionAuthFailure, AUTH_FAILURE_MESSAGE
 from .reviewer import review, rule_version
 from .services import audit
 from .keywords import matching_keywords
+from .review_workflow import work_results
 
 log = logging.getLogger(__name__)
 
 def _complete(db, run):
     run.completed = db.scalar(select(func.count()).select_from(Result).where(
-        Result.run_id == run.id, Result.status != "pending"))
+        Result.run_id == run.id, Result.status != "pending", work_results()))
     run.failed = db.scalar(select(func.count()).select_from(Result).where(
-        Result.run_id == run.id, Result.status == "error"))
+        Result.run_id == run.id, Result.status == "error", work_results()))
     run.state = "partial_failed" if run.failed else "completed"
     run.lease_owner = run.lease_until = None
     audit(db, run.actor_id, "run.finished", run.id, after={"state": run.state, "failed": run.failed})
@@ -57,7 +58,7 @@ def process_once():
             if run is None or run.lease_owner != owner:
                 return True
             if run.state == "pausing":
-                pending = db.scalar(select(Result.id).where(Result.run_id == claimed, Result.status == "pending").limit(1))
+                pending = db.scalar(select(Result.id).where(Result.run_id == claimed, Result.status == "pending", work_results()).limit(1))
                 if pending:
                     run.state, run.lease_owner, run.lease_until = "paused", None, None
                 else:
@@ -67,7 +68,7 @@ def process_once():
             if run.state != "running":
                 return True
             result = db.scalar(select(Result).outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
-                               .where(Result.run_id == claimed, Result.status == "pending")
+                               .where(Result.run_id == claimed, Result.status == "pending", work_results())
                                .order_by(Result.domain, Result.row_number, func.coalesce(ItemSource.group_index, 0), Result.id).limit(1))
             if not result:
                 _complete(db, run)

@@ -75,7 +75,7 @@ class Result(Base):
     __table_args__ = (UniqueConstraint("run_id", "item_id"),)
 
 class RunRetainedItem(Base):
-    """查漏补缺的已审查项快照，仅保存引用，不重复保存结果或加入工作队列。"""
+    """查漏补缺继承的独立结果副本，不加入工作队列和进度统计。"""
     __tablename__ = "run_retained_items"
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), primary_key=True)
     item_id: Mapped[str] = mapped_column(ForeignKey("items.id"), primary_key=True)

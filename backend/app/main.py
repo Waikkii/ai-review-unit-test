@@ -17,7 +17,7 @@ from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
 from .audit_view import SUMMARY_ACTIONS, describe_activity
-from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, run_json as workflow_run_json
+from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, work_results, run_json as workflow_run_json
 from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE
 from .result_filters import effective_result_expressions
 
@@ -210,6 +210,25 @@ def report_domains(report_id: str, user=Depends(current_user), db=Depends(get_db
     return list(db.scalars(select(Item.domain).where(Item.report_id == report_id).distinct().order_by(Item.domain)))
 
 
+@app.get("/api/reports/{report_id}/table-view")
+def report_table(report_id: str, run_id: str | None = None, filters: str = '{}',
+                 offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                 user=Depends(current_user), db=Depends(get_db)):
+    report = visible_report(db, report_id, user)
+    if run_id:
+        run = visible_run(db, run_id, user)
+        if run.report_id != report.id:
+            raise HTTPException(409, '审查历史不属于当前报告')
+        rows = results(run_id, offset=0, limit=report.item_count, status=None, domain=None,
+                       result=None, include_total=False, include_reviewed=True, user=user, db=db)
+    else:
+        rows = items(report_id, offset=0, limit=report.item_count, domain=None,
+                     include_total=False, user=user, db=db)
+    from .table_filters import table_page
+    keywords = db.scalars(select(Keyword).where(Keyword.deleted.is_(False))).all()
+    return table_page(rows, filters, offset, limit, keywords, bool(run_id))
+
+
 @app.patch("/api/items/{item_id}/note")
 def edit_note(item_id: str, data: NoteEdit, user=Depends(current_user), db=Depends(get_db)):
     item = db.get(Item, item_id)
@@ -278,7 +297,10 @@ def original(report_id: str, user=Depends(current_user), db=Depends(get_db)):
 def start_run(report_id: str, data: StartReview | None = None, user=Depends(current_user), db=Depends(get_db)):
     report = visible_report(db, report_id, user, write=True)
     lock_report(db, report)
-    run = create_run(db, report, user, data.selection_mode if data else "full")
+    base = visible_run(db, data.base_run_id, user) if data and data.base_run_id else None
+    if base and base.report_id != report.id:
+        raise HTTPException(409, "所选审查历史不属于当前报告")
+    run = create_run(db, report, user, data.selection_mode if data else "full", base)
     db.commit()
     return run_json(run, db)
 
@@ -307,7 +329,7 @@ def control_run(run_id: str, operation: str, data: StartReview | None = None,
         if run.state in ACTIVE_STATES or run.state == "blocked":
             run.state, run.lease_owner, run.lease_until = "cancelled", None, None
             db.flush()
-        run = create_run(db, report, user, selection_mode)
+        run = create_run(db, report, user, selection_mode, run)
     elif operation == "pause":
         if run.state == "queued" or (run.state == "running" and (run.lease_until is None or run.lease_until < now())):
             run.state, run.lease_owner, run.lease_until = "paused", None, None
@@ -321,7 +343,7 @@ def control_run(run_id: str, operation: str, data: StartReview | None = None,
         if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.id != run.id, Run.state.in_(ACTIVE_STATES))):
             raise HTTPException(409, "该报告已有其他活动审查")
         if run.state == "blocked":
-            for result in db.scalars(select(Result).where(Result.run_id == run.id, Result.status == "error")):
+            for result in db.scalars(select(Result).where(Result.run_id == run.id, Result.status == "error", work_results())):
                 if result.raw.get("error_type") == "SessionAuthFailure" or result.explanation == AUTH_FAILURE_MESSAGE:
                     db.execute(delete(ResultMeasurements).where(ResultMeasurements.result_id == result.id))
                     result.status, result.explanation, result.suggestion, result.raw = "pending", "", "", {}
@@ -356,6 +378,8 @@ def clear_run(run_id: str, user=Depends(current_user), db=Depends(get_db)):
     lock_report(db, report)
     if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(ACTIVE_STATES))):
         raise HTTPException(409, "报告仍有运行中或暂停中的审查，请在审查结束后删除批次")
+    from .review_workflow import detach_retained_results
+    detach_retained_results(db)
     result_ids = select(Result.id).where(Result.run_id == run.id)
     db.execute(update(RunRetainedItem).where(RunRetainedItem.result_id.in_(result_ids)).values(result_id=None))
     db.execute(delete(RunRetainedItem).where(RunRetainedItem.run_id == run.id))
@@ -382,7 +406,7 @@ def results(run_id: str, offset: int = Query(0, ge=0), limit: int = Query(100, g
     if include_reviewed and control and control.selection_mode == "missing":
         from .review_display import display_page
         return display_page(db, run, offset, limit, domain, result, status, include_total)
-    q = select(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
+    q = select(Result).where(work_results()).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     q = q.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
     q = q.outerjoin(ItemSource, ItemSource.item_id == Result.item_id)
     _, result_label = effective_result_expressions()
@@ -432,7 +456,7 @@ def result_options(run_id: str, include_reviewed: bool = False, user=Depends(cur
         query, _, label = display_query(run)
         return list(db.scalars(query.with_only_columns(label).distinct().order_by(label)))
     _, label = effective_result_expressions()
-    query = select(label).select_from(Result).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
+    query = select(label).select_from(Result).where(work_results()).outerjoin(ItemReviewState, ItemReviewState.item_id == Result.item_id)
     query = query.outerjoin(ResultWork, ResultWork.result_id == Result.id).where(Result.run_id == run_id)
     return list(db.scalars(query.distinct().order_by(label)))
 
@@ -441,7 +465,7 @@ def export(run_id: str, include_reviewed: bool = False, user=Depends(current_use
     run = visible_run(db, run_id, user)
     if run.state in ACTIVE_STATES:
         raise HTTPException(409, "请等待本批次审查结束")
-    result_rows = db.scalars(select(Result).where(Result.run_id == run.id).order_by(Result.domain, Result.row_number)).all()
+    result_rows = db.scalars(select(Result).where(Result.run_id == run.id, work_results()).order_by(Result.domain, Result.row_number)).all()
     control = db.get(RunControl, run_id)
     if include_reviewed and control and control.selection_mode == "missing":
         from .review_display import display_query
