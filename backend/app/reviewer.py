@@ -61,8 +61,10 @@ def review(fields, keywords, username):
             if not isinstance(item, (tuple, list)) or len(item) != 2:
                 raise ValueError("每张图片必须为 (Base64字符串, MIME)")
             content, mime = item
-            if not isinstance(content, str) or mime not in {"image/jpeg", "image/png", "image/gif", "image/bmp", "image/x-ms-bmp"}:
-                raise ValueError("附件格式不符合要求，支持 JPEG、PNG、GIF、BMP")
+            if not isinstance(content, str) or mime not in (
+                "image/jpeg", "image/png", "image/gif", "image/bmp", "image/x-ms-bmp", "unknown",
+            ):
+                raise ValueError("附件格式不符合要求，支持 JPEG、PNG、GIF、BMP 和 unknown")
             # 本地下载函数已转换为 Base64；原样透传，不解码或重复编码。
             validated.append((content, mime))
         return validated

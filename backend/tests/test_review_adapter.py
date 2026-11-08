@@ -123,6 +123,7 @@ def test_invalid_attachment_urls_are_still_rejected_before_download(client, monk
     (b"GIF87a", "image/gif", False), (b"GIF89a", "image/gif", False),
     (b"BM", "image/bmp", False), (b"BM", "image/x-ms-bmp", False),
     (b"BM", "image/bmp", True), (b"\xff\xd8\xff", "image/jpeg", True),
+    (b"unrecognized", "unknown", False),
 ])
 def test_gif_bmp_and_images_over_previous_size_limit_reach_local_review(client, monkeypatch, header, mime, large):
     content = header + (b"x" * (10 * 1024 * 1024 + 1) if large else b"test-image")
