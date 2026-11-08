@@ -111,31 +111,20 @@ def main():
     parser.add_argument("--table", help="旧库中的关键词表名")
     parser.add_argument("--excel-key-order", choices=("ABCD", "ACBD"), default="ABCD",
                         help="旧库列按 Excel 四字段顺序排列；旧库 B/C 业务含义对调时用 ACBD")
-    parser.add_argument("--allow-unmatched", action="store_true",
-                        help="允许仅导出匹配到指标的记录")
     args = parser.parse_args()
     try:
         table, old_rows = read_keywords(args.source.resolve(strict=True), args.table, args.excel_key_order)
         metrics = read_metrics(args.excel)
-        rows = []
-        unmatched = []
-        for a, b, c, d, keyword in old_rows:
-            key = (a, b, c, d)
-            if key not in metrics:
-                unmatched.append(key)
-                continue
-            rows.extend((*key, metric, keyword) for metric in sorted(metrics[key]))
-        matched = len(old_rows) - len(unmatched)
-        print(f"表 {table} | 旧库 {len(old_rows)} 条 | 匹配 {matched} 条 | "
-              f"未匹配 {len(unmatched)} 条 | 展开后 {len(rows)} 条")
-        for key in unmatched[:10]:
-            print("未匹配四字段：", repr(key))
+        keywords = {tuple(row[:4]): row[4] for row in old_rows}
+        matched = metrics.keys() & keywords.keys()
+        rows = [
+            (*key, metric, keywords[key])
+            for key in sorted(matched)
+            for metric in sorted(metrics[key])
+        ]
+        print(f"表 {table} | Excel 命中旧库 {len(matched)} 组 | 展开后 {len(rows)} 条")
         if args.output is None:
             return
-        if not rows:
-            raise ValueError("没有匹配记录，未生成新库")
-        if unmatched and not args.allow_unmatched:
-            raise ValueError("有旧记录缺少匹配指标，未生成新库。仅导出匹配项时请显式加 --allow-unmatched")
         write_output(args.output, table, rows)
         print(f"已生成 {args.output}")
     except (OSError, ValueError, sqlite3.Error, BadZipFile, InvalidFileException) as exc:
@@ -144,3 +133,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
