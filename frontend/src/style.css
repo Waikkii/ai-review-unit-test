@@ -459,8 +459,8 @@ dd {
 .keyword-table { width: 100%; table-layout: fixed; font-size: 12px; }
 .keyword-table th { position: sticky; top: 0; background: #f2f7f8; z-index: 1; }
 .keyword-table td, .keyword-table th { padding: 8px 10px; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
-.keyword-table th:nth-child(5) { width: 30%; }
-.keyword-table th:nth-child(6), .keyword-table th:nth-child(7) { width: 70px; }
+.keyword-table th:nth-child(6) { width: 30%; }
+.keyword-table th:nth-child(7), .keyword-table th:nth-child(8) { width: 70px; }
 .keyword-table td button { white-space: nowrap; min-width: 46px; padding: 4px 7px; font-size: 12px; }
 .keyword-column-heading { display: flex; align-items: center; justify-content: space-between; gap: 3px; white-space: normal; }
 .column-filter-trigger { position: relative; flex: 0 0 22px; min-width: 22px; padding: 2px; border-color: transparent; background: transparent; }

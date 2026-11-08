@@ -3,6 +3,7 @@ import base64
 import types
 import pytest
 from app.config import settings
+from app.keywords import ENTRY_DOMAIN
 from app.reviewer import review
 from app.auth_sessions import SessionAuthFailure
 from test_auth_sessions import adapter
@@ -41,7 +42,8 @@ def test_review_receives_unit_keyword_and_url_string_and_downloads_multiple_imag
         return {"status": "passed", "explanation": "图片符合门限", "ai_threshold": "10", "ai_value": "8.5"}, {"model": "local-test"}
 
     configure_rule(monkeypatch, rule)
-    verdict, raw = review({"单位": "dB", "附件链接": url}, [{"payload": {"e": "输出功率"}}], "demo")
+    verdict, raw = review({"单位": "dB", "附件链接": url},
+                          [{"domain": ENTRY_DOMAIN, "payload": {"e": "平均功率", "i": "输出功率"}}], "demo")
     assert entered == [True] and verdict.ai_value == "8.5" and raw == {"model": "local-test"}
     assert len(calls["login"]) == 1 and len(calls["fetch"]) == 2
 

@@ -176,9 +176,12 @@ const historyTime = (value: string) => {
   });
 };
 const PAGE = 100;
-const keywordFields = { a: "测试对象", b: "用例编号", c: "用例名称", d: "测试小项", e: "关键词" };
-const entryDomain = "__five_column_keywords__";
-const emptyEntry = () => ({ a: "", b: "", c: "", d: "", e: "" });
+const keywordKeyFields = { a: "测试对象", b: "用例编号", c: "用例名称", d: "测试小项", e: "指标名称" };
+const keywordKeyColumns = Object.entries(keywordKeyFields);
+const keywordFields = { ...keywordKeyFields, i: "关键词" };
+const entryDomain = "__six_column_keywords__";
+const legacyEntryDomain = "__five_column_keywords__";
+const emptyEntry = () => ({ a: "", b: "", c: "", d: "", e: "", i: "" });
 const keywordText = (payload: Record<string, unknown>) =>
   Object.entries(keywordFields).map(([key, label]) => `${label}：${String(payload[key] ?? "")}`).join("\n");
 const reportColumns = ["测试对象", "用例编号", "用例名称", "测试小项", "指标名称", "测试条件", "判据门限", "单位", "门限", "值", "备注", "附件链接"];
@@ -189,7 +192,7 @@ const keywordColumns = { ...keywordFields, version: "版本", operation: "操作
 const keywordCell = (k: Keyword, key: string): string => key === "version" ? String(k.version)
   : key === "operation" ? (k.domain === entryDomain ? "编辑" : "")
   : k.domain === entryDomain ? String(k.payload[key] ?? "")
-  : key === "a" ? k.domain : key === "e" ? JSON.stringify(k.payload) : k.key;
+  : key === "a" ? k.domain : key === "i" ? JSON.stringify(k.payload) : k.key;
 
 function ColumnFilter({ label, options, value, onChange }: {
   label: string; options: string[]; value?: string[]; onChange: (values?: string[]) => void;
@@ -379,7 +382,7 @@ function App() {
   const runViewVersion = useRef(0);
   const itemsQuery = useRef("");
   const keywordIndex = useMemo(() => new Map(keywords.filter(k => k.domain === entryDomain).map(k =>
-    [keywordIdentity([k.payload.a, k.payload.b, k.payload.c, k.payload.d]), k])), [keywords]);
+    [keywordIdentity(keywordKeyColumns.map(([key]) => k.payload[key])), k])), [keywords]);
   const [keywordFilters, setKeywordFilters] = useState<Record<string, string[] | undefined>>({});
   const keywordView = useMemo(() => {
     const keys = Object.keys(keywordColumns);
@@ -634,7 +637,7 @@ function App() {
     document.querySelector(".keyword-change-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const linkedKeyword = keywords.find(
-    (k) => k.domain === entryDomain && ["a", "b", "c", "d"].every(key => k.payload[key] === entry[key]),
+    (k) => k.domain === entryDomain && keywordKeyColumns.every(([key]) => k.payload[key] === entry[key]),
   );
   const submitKeyword = () =>
     act(async () => {
@@ -664,12 +667,9 @@ function App() {
   const adjustKeyword = (row: ReviewRow) => act(async () => {
     const entries = await api<Keyword[]>("/keywords");
     setKeywords(entries);
-    const next = {
-      a: row.fields["测试对象"] ?? "", b: row.fields["用例编号"] ?? "",
-      c: row.fields["用例名称"] ?? "", d: row.fields["测试小项"] ?? "", e: "",
-    };
+    const next = { ...emptyEntry(), ...Object.fromEntries(keywordKeyColumns.map(([key, label]) => [key, row.fields[label] ?? ""])) };
     const existing = entries.find(k => k.domain === entryDomain &&
-      ["a", "b", "c", "d"].every(key => k.payload[key] === next[key as keyof typeof next]));
+      keywordKeyColumns.every(([key, label]) => k.payload[key] === row.fields[label]));
     if (existing) kwFrom(existing);
     else { setEntry(next); setAction("create"); }
     setLinkResult(row.result?.id || null);
@@ -677,7 +677,7 @@ function App() {
     setKeywordDialog(true);
   });
   const rowKeyword = (row: ReviewRow) => keywordIndex.get(keywordIdentity(
-    ["测试对象", "用例编号", "用例名称", "测试小项"].map(label => row.fields[label] ?? "")));
+    keywordKeyColumns.map(([, label]) => row.fields[label])));
   const changeReviewState = (row: ReviewRow, state: string) => act(async () => {
     await api(`/items/${row.itemId}/review-state`, { method: "PATCH",
       body: json({ state, revision: row.reviewRevision, reviewed_revision: row.reviewedRevision, run_id: run?.id ?? null }) });
@@ -735,7 +735,7 @@ function App() {
             onChange={event => void changeReviewState(row, event.target.value)}>
             <option value="pending">待审查</option><option value="reviewed">已审查</option>
           </select> : <span className={`review-state ${row.pendingReview ? "review-pending" : "review-done"}`}>{row.pendingReview ? "待审查" : "已审查"}</span>}</td>
-          <td className="row-actions keyword-cell"><div className="keyword-inline"><span>{String(rowKeyword(row)?.payload.e ?? "未配置")}</span>
+          <td className="row-actions keyword-cell"><div className="keyword-inline"><span>{String(rowKeyword(row)?.payload.i ?? "未配置")}</span>
             {canEdit && <button disabled={busy} aria-label="编辑当前项关键词" title="编辑关键词"
               onClick={() => void adjustKeyword(row)}>✎</button>}</div></td>
         </tr>;
@@ -1089,7 +1089,7 @@ function App() {
                     <input
                       required={key === "e"}
                       value={entry[key]}
-                      disabled={key === "e" ? action === "delete" : action !== "create"}
+                      disabled={key === "i" ? action === "delete" : action !== "create"}
                       onChange={(e) => setEntry({ ...entry, [key]: e.target.value })}
                     />
                   </label>
@@ -1133,7 +1133,7 @@ function App() {
                 <article key={c.id} className="keyword">
                   <div className="section-head">
                     <b>
-                      {labels[c.action]} · {c.domain === entryDomain ? String(c.payload.c) : `${c.domain} / ${c.key}`}
+                      {labels[c.action]} · {c.domain === entryDomain ? `${c.payload.c} / ${c.payload.e}` : `${c.domain} / ${c.key}`}
                     </b>
                     <span className="pill">{labels[c.state]}</span>
                   </div>
@@ -1142,7 +1142,9 @@ function App() {
                   {c.review_note && <p>审批说明：{c.review_note}</p>}
                   {user.role === "admin" && c.state === "pending" && (
                     <div className="actions">
+                      {c.domain === legacyEntryDomain && <span className="muted">请按指标名称重新提交旧申请</span>}
                       <button
+                        disabled={c.domain === legacyEntryDomain}
                         onClick={() => {
                           setDecision({ id: c.id, approve: true });
                           setDecisionNote("");
@@ -1241,10 +1243,10 @@ function App() {
             <button disabled={busy} onClick={() => setKeywordDialog(false)}>关闭</button></div>
           {error && <p role="alert" className="error">{error}</p>}
           <form onSubmit={event => { event.preventDefault(); void submitKeyword(); }}>
-            <div className="keyword-identity">{Object.entries(keywordFields).filter(([key]) => key !== "e").map(([key, label]) =>
+            <div className="keyword-identity">{keywordKeyColumns.map(([key, label]) =>
               <label key={key}>{label}<input readOnly value={entry[key]} /></label>)}</div>
-            <label>关键词<textarea autoFocus required maxLength={32767} rows={5} value={entry.e}
-              onChange={event => setEntry({ ...entry, e: event.target.value })} /></label>
+            <label>关键词<textarea autoFocus required maxLength={32767} rows={5} value={entry.i}
+              onChange={event => setEntry({ ...entry, i: event.target.value })} /></label>
             <label>变更原因<textarea required value={kwReason} onChange={event => setKwReason(event.target.value)} /></label>
             <div className="actions"><button type="button" disabled={busy} onClick={() => setKeywordDialog(false)}>取消</button>
               <button className="primary" disabled={busy}>{user.role === "admin" ? "保存并生效" : "提交审批"}</button></div>

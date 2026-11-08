@@ -7,18 +7,18 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
-from app.bootstrap import create_business_database, read_seed
+from app.bootstrap import create_business_database, import_existing_keywords, read_seed
 from app.config import ROOT, Settings
-from app.keywords import ENTRY_DOMAIN, entry_key
+from app.keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, entry_key
 from app.models import Keyword, Report, Run, User
 
 
 def source_db(tmp_path, column="I", rows=None):
     path = tmp_path / "test.db"
     with sqlite3.connect(path) as db:
-        db.execute(f'CREATE TABLE seed (A TEXT, B TEXT, C TEXT, D TEXT, "{column}" TEXT)')
-        db.executemany("INSERT INTO seed VALUES (?, ?, ?, ?, ?)", rows or [
-            ("对象", "001", "用例", "", "关键词"), ("对象", "001", "用例", " ", "第二个关键词")])
+        db.execute(f'CREATE TABLE seed (A TEXT, B TEXT, C TEXT, D TEXT, E TEXT, "{column}" TEXT)')
+        db.executemany("INSERT INTO seed VALUES (?, ?, ?, ?, ?, ?)", rows or [
+            ("对象", "001", "用例", "", "指标一", "关键词"), ("对象", "001", "用例", "", "指标二", "第二个关键词")])
     return path
 
 
@@ -28,7 +28,7 @@ def test_seed_import_preserves_exact_keys_and_creates_empty_history(tmp_path, co
     original = source.read_bytes()
     table, payloads = read_seed(source)
     assert table == "seed"
-    assert payloads[0] == {"a": "对象", "b": "001", "c": "用例", "d": "", "e": "关键词"}
+    assert payloads[0] == {"a": "对象", "b": "001", "c": "用例", "d": "", "e": "指标一", "i": "关键词"}
     target = tmp_path / "review.db"
     create_business_database(target, payloads)
     engine = create_engine("sqlite:///" + target.as_posix())
@@ -46,8 +46,8 @@ def test_seed_import_preserves_exact_keys_and_creates_empty_history(tmp_path, co
 
 
 @pytest.mark.parametrize("rows", [
-    [("a", "b", "c", "d", " ")], [("a", "b", "c", None, "word")],
-    [("a", "b", "c", "d", "one"), ("a", "b", "c", "d", "two")]])
+    [("a", "b", "c", "d", "metric", " ")], [("a", "b", "c", None, "metric", "word")],
+    [("a", "b", "c", "d", "metric", "one"), ("a", "b", "c", "d", "metric", "two")]])
 def test_invalid_source_rejected(tmp_path, rows):
     with pytest.raises(ValueError):
         read_seed(source_db(tmp_path, rows=rows))
@@ -58,6 +58,26 @@ def test_missing_source_does_not_create_empty_database(tmp_path):
     with pytest.raises(FileNotFoundError):
         read_seed(path)
     assert not path.exists()
+
+
+def test_existing_database_import_preserves_legacy_and_rejects_conflicts(tmp_path):
+    _, payloads = read_seed(source_db(tmp_path))
+    target = tmp_path / "review.db"
+    create_business_database(target, [])
+    engine = create_engine("sqlite:///" + target.as_posix())
+    with Session(engine) as db:
+        db.add(User(username="admin", role="admin", active=True))
+        db.add(Keyword(domain=LEGACY_ENTRY_DOMAIN, key="legacy", payload={"e": "旧词"}))
+        db.commit()
+    engine.dispose()
+    assert import_existing_keywords(target, payloads) == (2, 0)
+    assert import_existing_keywords(target, payloads, "admin", True) == (2, 0)
+    assert import_existing_keywords(target, payloads, "admin", True) == (0, 2)
+    with pytest.raises(ValueError):
+        import_existing_keywords(target, [{**payloads[0], "i": "冲突词"}], "admin", True)
+    with Session(engine) as db:
+        assert db.scalar(select(Keyword).where(Keyword.domain == LEGACY_ENTRY_DOMAIN)).payload == {"e": "旧词"}
+    engine.dispose()
 
 
 def test_ambiguous_source_tables_require_table_argument(tmp_path):

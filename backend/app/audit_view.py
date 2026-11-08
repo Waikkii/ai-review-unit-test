@@ -1,4 +1,6 @@
 """Concise, human-readable activity feed over the retained audit trail."""
+from .keywords import ENTRY_DOMAIN
+
 SUMMARY_ACTIONS = {
     "report.upload": ("上传报告", "report"),
     "run.start": ("发起 AI 审查", "review"),
@@ -19,7 +21,8 @@ def describe_activity(record, report_names, run_names):
         verb = {"create": "新增", "update": "修改", "delete": "删除"}.get(after.get("action"), "变更")
         label = "提交关键词" + verb
         payload = after.get("payload", {})
-        target = " / ".join(str(payload[k]) for k in ("a", "c", "d") if payload.get(k))
+        fields = ("a", "c", "d", "e") if after.get("domain") == ENTRY_DOMAIN else ("a", "c", "d")
+        target = " / ".join(str(payload[k]) for k in fields if payload.get(k))
         target = target or " / ".join(str(after[k]) for k in ("domain", "key") if after.get(k))
         return label, category, target or "关键词申请"
     target = report_names.get(record.object_id) or run_names.get(record.object_id)

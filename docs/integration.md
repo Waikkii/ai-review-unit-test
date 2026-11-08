@@ -5,19 +5,19 @@
 - LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password) 返回 {username, cookies}；fetchimage(url, cookies) 返回 [(base64_string, MIME), ...]。
 - LOCAL_REVIEW_MODULE=local_adapters.review_rules：review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage) 返回 (ai_threshold, ai_value, result) 三个字符串，并提供 RULE_VERSION。兼容旧版 (verdict, raw) 返回格式。
 - attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[str, str]]]。
-- 自动判定优先级：无附件链接直接返回“缺少附件”；否则判据门限含中文汉字时返回“主观类”。两种情况均直接已审查，不调用本地模型/图片函数。其余测试项再按四字段匹配关键词，无关键词返回“缺少关键词”并保留待审查资格。
+- 自动判定优先级：无附件链接直接返回“缺少附件”；否则判据门限含中文汉字时返回“主观类”。两种情况均直接已审查，不调用本地模型/图片函数。其余测试项再按五字段匹配关键词，无关键词返回“缺少关键词”并保留待审查资格。
 - 附件主机名和 IP 不受白名单限制，无需配置 ATTACHMENT_HOSTS；旧配置保留也不影响访问。地址仍需为不含账号密码的有效 HTTP/HTTPS URL。图片支持 JPEG/PNG/GIF/BMP，每次最多 10 张，不限制单张图片字节大小；格式按原样传给本地审查函数。
 - verdict 包含 status（passed/failed/needs_review）、explanation、evidence、suggestion、ai_threshold、ai_value；raw 为可 JSON 序列化的 dict。
 - 规则变化时更新 RULE_VERSION，统一重启 API/Worker；整项执行时间应小于 LEASE_SECONDS（默认 300 秒）。
 - AI 请求由本地 review_item 实现；本机 `.env` 可配置 `MODEL` 和 `APPLY_TOKEN`，在函数中通过 `from app.config import settings` 读取 `settings.model`、`settings.apply_token`。令牌由本地函数按实际接口要求使用，框架不会自动添加请求头。`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 继续兼容，审查记录优先使用 `MODEL`，为空时使用 `AI_MODEL`。修改配置后需重启 API 和 Worker。
 - 旧适配器及其配置已移除，真实接入统一使用上述模块；原始模型结果、任务快照和至少一次调用语义保留。
 
-已有 SQLite 关键词库结构已确认：a、b、c、d、e 均为 TEXT，PRIMARY KEY (a,b,c,d)，e 只有一个关键词。
-尚未导入真实数据库；后续提供数据库文件或读取接口及表名后，通过以下接口提交映射记录。
-POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, reason, result_id?}。
-新增 base_version=0，修改/删除必须匹配当前版本；修改仅替换 e，调整联合主键需删除旧记录并新增。
-现有 keywords/审批/审计表保留，五列数据由适配层存入 payload，无需重建已有数据库。
-导入也应通过审批/管理员变更服务留痕，不能绕过审计直接在 UI 更新数据库。
+SQLite 源关键词表使用 A/B/C/D/E 联合主键，E 是指标名称，I 是单个关键词。
+POST /api/keyword-entry-requests 使用 {action, entry:{a,b,c,d,e,i}, base_version, reason, result_id?}。
+新增 base_version=0，修改或删除必须匹配当前版本。修改仅替换 i，调整联合主键需删除旧记录并新增。
+业务库将六个文本字段存入 keywords.payload，五字段词条的 domain 为 __six_column_keywords__。
+旧词条和批次快照保留供追溯。旧批次继续执行及新批次均逐项读取业务库中最新生效的五字段词条。导入命令见[正式环境初始化](正式环境初始化.md)。
+
 
 ## Excel 样例适配
 
@@ -27,7 +27,7 @@ POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, rea
 实际报告不再兼容前期错误样例中的两行表头；单行简化演示模板单独保留。
 识别 11 个业务字段：上层用例编号至单位，下层门限、值、备注、附件链接。
 测试对象列纳入解析、批次快照及结果导出；原始字段只读，纵向合并时沿用首格。
-旧 11 字段模板兼容读取，但缺少测试对象时不会匹配五列关键词。
+旧 11 字段模板兼容读取，但缺少测试对象时不会匹配五字段关键词。
 纵向合并字段沿用首格；横向合并说明不扩散到“值”列。
 测试详情标题后 30 行内查找表头；不完整的重复字段或多测试详情区域会明确报错，避免选择错误轮次。
 第一轮下支持多组完整的“门限、值、备注、附件链接”，每组“值”非空即生成一个独立审查项（数值 0 也保留），互不补用其他组的值或附件。同一行可对应多个项，按源行号和从左到右的组序排序。供应商等横向分组标签（如 A/B、K/J）随各组保存，网页在领域下方显示以区分同一行的各组；不把这些标签混入本地 review_item 业务入参。
@@ -42,14 +42,14 @@ POST /api/keyword-entry-requests：{action, entry:{a,b,c,d,e}, base_version, rea
 用户备注按测试项保存，与原始 Excel 备注及 AI 结论分离，同一项在不同批次中展示当前备注。
 PATCH /api/items/{id}/note：{note, version}，首次 version=0，后续使用 note_version，冲突返回 409。
 仅报告本人可修改备注，管理员查看他人报告时只读；备注修改保留审计记录，不改变 AI 原始结果或报告版本。
-每行均可进入关键词调整，匹配四字段后关联已有词条或新建申请；原有审批规则继续生效。
+每行均可进入关键词调整，匹配五字段后关联已有词条或新建申请；原有审批规则继续生效。
 
 ## 内网接入与自动刷新
 
 本地文件不纳入 Git：login_adapter.py 提供 login(username, password) 和 fetchimage(url, cookies)；
 review_rules.py 提供 RULE_VERSION 和 review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage)。
-每条测试项先由系统读取单位、按 a～d 匹配关键词并取 e 字符串、读取附件入口字符串，再调用该函数。
-未匹配到关键词或 e 为空时，系统直接返回 missing_keyword（缺少关键词），不调用审查函数、不请求图片/模型。
+每条测试项先由系统读取单位、按 a～e 匹配关键词并取 i 字符串、读取附件入口字符串，再调用该函数。
+未匹配到关键词或关键词为空时，系统直接返回 missing_keyword（缺少关键词），不调用审查函数、不请求图片/模型。
 该结果保留待审查资格，补齐关键词后可补审。无附件直接已审查并返回“缺少附件”；判据门限含中文时已审查并返回“主观类”，均不进入本地函数。有附件且为非主观类时，图片不预先下载，由审查函数内部调用系统传入的 fetchimage(url)。
 该回调已绑定当前登录用户，内部调用 login_adapter.fetchimage(url, cookies)，并负责认证重试和图片校验。
 两层 fetchimage 均返回 list[tuple[str, str]]，每项是一张图片的 Base64 字符串和 MIME；允许空列表，最多 10 张，不限制单张图片字节大小。MIME 支持 image/jpeg、image/png、image/gif、image/bmp 和 image/x-ms-bmp。content 由本地下载函数转换为 Base64 字符串，框架不解码、不检查二进制文件头、不重复编码，原样交给本地审查函数。
@@ -102,7 +102,7 @@ state 仅允许 pending/reviewed，对应待审查/已审查；revision 和 revi
 
 领域关键词的“当前关键词”各列表头提供筛选菜单：搜索选项、复选多个值、确定后生效；同列选项取并集，多列条件取交集，选项根据其他列筛选联动。搜索后确定会仅保留搜索结果中勾选的值。支持清除此列及清除全部筛选，筛选覆盖接口返回的完整关键词库，不受表格滚动位置影响。
 
-报告表格最后一列展示当前关键词并提供编辑按钮，在当前页面弹窗修改；四个匹配字段只读，可编辑关键词和原因。复用 keyword-entry-requests：普通用户提交审批，管理员直接生效，生效后相关测试项恢复待审查。关键词管理页为上方编辑表单、下方逐行关键词表格，审批记录在其后。
+报告表格最后一列展示当前关键词并提供编辑按钮，在当前页面弹窗修改。五个匹配字段只读，可编辑关键词和原因。复用 keyword-entry-requests：普通用户提交审批，管理员直接生效，生效后相关测试项恢复待审查。关键词管理页为上方编辑表单、下方逐行关键词表格，审批记录在其后。
 
 页面交互：待审查显示橙色，已审查显示绿色；关键词编辑图标位于关键词右侧。上传解析 Excel 时显示全屏加载蒙版，页面通过 inert 禁用操作，成功或失败后均解除。页面精简操作说明，详细规则保留在文档中。
 

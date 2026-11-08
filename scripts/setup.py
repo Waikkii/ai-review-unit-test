@@ -1,4 +1,4 @@
-"""首次初始化：默认预览正式关键词导入；--apply 创建新库并切换配置。"""
+"""预览五字段关键词导入，或使用 --apply 创建或更新业务库。"""
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +6,7 @@ import re
 import secrets
 import shutil
 import sys
+from sqlalchemy.exc import SQLAlchemyError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
@@ -48,14 +49,17 @@ def configure_environment(text, target, admin_user):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=ROOT / "test.db")
+    parser.add_argument("--source", type=Path, default=ROOT / "keyword-expanded.db")
     parser.add_argument("--table")
     parser.add_argument("--keyword-column", help="关键词列名；默认检测 I 或 valve")
     parser.add_argument("--target", type=Path, default=ROOT / "data" / "review.db")
-    parser.add_argument("--admin-user", help="首次管理员的实际内网用户名")
-    parser.add_argument("--apply", action="store_true", help="实际创建正式数据库并更新 .env")
+    parser.add_argument("--admin-user", help="管理员的实际内网用户名")
+    parser.add_argument("--apply", action="store_true", help="执行初始化或导入")
+    parser.add_argument("--import-keywords", action="store_true", help="向已存在的业务库导入关键词，保留报告与配置")
     parser.add_argument("--demo", action="store_true", help="显式创建演示环境，不导入关键词")
     args = parser.parse_args()
+    if args.demo and args.import_keywords:
+        parser.error("--demo 与 --import-keywords 不能同时使用")
     env = ROOT / ".env"
     if args.demo:
         if env.exists():
@@ -69,15 +73,19 @@ def main():
         env.chmod(0o600)
         print("已创建显式演示配置；未执行正式初始化。")
         return
-    from app.bootstrap import create_business_database, read_seed
+    from app.bootstrap import create_business_database, import_existing_keywords, read_seed
 
     try:
         source = args.source.resolve(strict=True)
         target = args.target.resolve()
-        if source == target or target.exists():
+        if source == target or (not args.import_keywords and target.exists()):
             raise ValueError("目标必须是不存在的新数据库，不能覆盖源库或已有业务库")
         table, payloads = read_seed(source, args.table, args.keyword_column)
         print(f"源表：{table}；有效关键词：{len(payloads)}；目标：{target}")
+        if args.import_keywords:
+            added, unchanged = import_existing_keywords(target, payloads, args.admin_user, args.apply)
+            print(f"{'已导入' if args.apply else '预览待导入'} {added} 条，已有相同记录 {unchanged} 条")
+            return
         if not args.apply:
             print("仅预览；未创建数据库，未修改 .env。添加 --apply --admin-user 用户名 后执行。")
             return
@@ -103,7 +111,7 @@ def main():
         if backup:
             print("旧配置备份：", backup)
         print("启动前完成本地登录、图片下载和审查函数，并核对 MODEL、APPLY_TOKEN。")
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, SQLAlchemyError) as exc:
         parser.exit(1, str(exc) + "\n")
 
 

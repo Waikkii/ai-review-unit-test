@@ -4,7 +4,7 @@ from .db import engine
 from sqlalchemy import inspect, select, update
 from sqlalchemy.orm import Session
 from .models import ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword, RunRetainedItem
-from .keywords import matching_keywords
+from .keywords import LEGACY_ENTRY_DOMAIN, matching_keywords
 from .services import keyword_dict
 from .models import RunItemReviewState
 
@@ -31,7 +31,8 @@ def main():
         if missing:
             ids = [item.id for item in missing]
             latest = {}
-            live = [keyword_dict(k) for k in db.scalars(select(Keyword).where(Keyword.deleted.is_(False)))]
+            live = [keyword_dict(k) for k in db.scalars(select(Keyword).where(
+                Keyword.deleted.is_(False), Keyword.domain != LEGACY_ENTRY_DOMAIN))]
             for offset in range(0, len(ids), 500):
                 for result, snapshot in db.execute(select(Result, Run.keyword_snapshot).join(Run)
                     .where(Result.item_id.in_(ids[offset:offset + 500])).order_by(Run.created_at, Result.id)):

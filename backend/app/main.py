@@ -11,7 +11,7 @@ from .config import settings, ROOT
 from .db import get_db, uid, now
 from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential, RunRetainedItem
 from .schemas import Login, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
-from .keywords import ENTRY_DOMAIN, entry_key, matches_entry
+from .keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, entry_key, matches_entry
 from .auth import authenticate, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
@@ -512,7 +512,8 @@ def export(run_id: str, include_reviewed: bool = False, user=Depends(current_use
 
 @app.get("/api/keywords")
 def keywords(user=Depends(current_user), db=Depends(get_db)):
-    return [keyword_dict(k) for k in db.scalars(select(Keyword).where(Keyword.deleted.is_(False))
+    return [keyword_dict(k) for k in db.scalars(select(Keyword).where(
+                                               Keyword.deleted.is_(False), Keyword.domain != LEGACY_ENTRY_DOMAIN)
                                                .order_by(Keyword.domain, Keyword.key))]
 
 @app.post("/api/keyword-requests", status_code=201)
@@ -574,6 +575,8 @@ def decide(change_id: str, data: Decision, user=Depends(admin_user), db=Depends(
     if change.owner_id == user.id:
         raise HTTPException(403, "不能审批自己的历史申请")
     if data.approve:
+        if change.domain == LEGACY_ENTRY_DOMAIN:
+            raise HTTPException(409, "旧四字段申请无法生效，请按指标名称重新提交")
         apply_change(db, change, user)
     change.state = "approved" if data.approve else "rejected"
     change.reviewer_id, change.review_note = user.id, data.note

@@ -89,7 +89,8 @@ def test_restart_fences_inflight_old_result_and_preserves_selected_mode(client, 
 def test_effective_keyword_only_invalidates_exact_items_and_missing_only_reviews_those(client, headers, monkeypatch):
     h, admin = headers(), headers("admin")
     book, sheet = detail_workbook()
-    sheet["C20"], sheet["D20"] = "功率测试", "常温"
+    for row, metric in ((20, "平均功率"), (21, "峰值功率")):
+        sheet[f"C{row}"], sheet[f"D{row}"], sheet[f"E{row}"] = "功率测试", "常温", metric
     response = client.post("/api/reports", headers=h, files={"file": ("detail.xlsx", serialize(book))})
     report = response.json()
     monkeypatch.setattr("app.worker.review", lambda *args: (ReviewVerdict(status="needs_review", explanation="验证关键词版本"), {}))
@@ -98,7 +99,7 @@ def test_effective_keyword_only_invalidates_exact_items_and_missing_only_reviews
     original_results = client.get(f'/api/runs/{run["id"]}/results', headers=h).json()
     assert all(not r["pending_review"] for r in get_rows(client, h, report["id"]))
     change = client.post("/api/keyword-entry-requests", headers=h, json={"action": "create",
-        "entry": {"a": "设备A", "b": "TC-01", "c": "功率测试", "d": "常温", "e": "功率"},
+        "entry": {"a": "设备A", "b": "TC-01", "c": "功率测试", "d": "常温", "e": "平均功率", "i": "功率"},
         "base_version": 0, "reason": "补充关键词"}).json()
     assert all(not r["pending_review"] for r in get_rows(client, h, report["id"]))
     assert client.post(f'/api/keyword-requests/{change["id"]}/decision', headers=admin,
@@ -117,7 +118,7 @@ def test_effective_keyword_only_invalidates_exact_items_and_missing_only_reviews
 
     monkeypatch.setattr("app.worker.review", review)
     assert process_once()
-    assert len(calls) == 1 and calls[0][1][0]["payload"]["e"] == "功率"
+    assert len(calls) == 1 and calls[0][1][0]["payload"]["i"] == "功率"
     assert all(not r["pending_review"] for r in get_rows(client, h, report["id"]))
     old_results = client.get(f'/api/runs/{run["id"]}/results', headers=h).json()
     assert [r["raw"] for r in old_results] == [r["raw"] for r in original_results]

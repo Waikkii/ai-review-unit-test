@@ -5,15 +5,23 @@ from datetime import timedelta
 from sqlalchemy import select, update, or_, and_, func
 from .config import settings
 from .db import Session, now, uid
-from .models import Run, Result, User, ResultMeasurements, RunControl, ItemReviewState, ResultWork, ItemSource
+from .models import Run, Result, User, Item, Keyword, ResultMeasurements, RunControl, ItemReviewState, ResultWork, ItemSource
 from .auth_sessions import SessionAuthFailure, AUTH_FAILURE_MESSAGE
 from .reviewer import review, rule_version
-from .services import audit
-from .keywords import matching_keywords
+from .services import audit, keyword_dict
+from .keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, KEY_FIELDS, entry_key, matching_keywords
 from .review_workflow import work_results
 from .models import RunItemReviewState
 
 log = logging.getLogger(__name__)
+
+
+def _current_keyword(db, fields):
+    if not all(name in fields for name in KEY_FIELDS.values()):
+        return None
+    key = entry_key({key: fields[name] for key, name in KEY_FIELDS.items()})
+    return db.scalar(select(Keyword).where(
+        Keyword.domain == ENTRY_DOMAIN, Keyword.key == key, Keyword.deleted.is_(False)))
 
 def _complete(db, run):
     run.completed = db.scalar(select(func.count()).select_from(Result).where(
@@ -76,10 +84,22 @@ def process_once():
                 db.commit()
                 return True
             result_id, fields, domain = result.id, result.fields, result.domain
-            keywords = matching_keywords(run.keyword_snapshot, fields, domain)
+            keywords = matching_keywords(
+                (entry for entry in run.keyword_snapshot
+                 if entry["domain"] not in (ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN)),
+                fields, domain)
             username = db.get(User, run.actor_id).username
             work = db.get(ResultWork, result.id)
             item_revision = work.item_revision if work else 1
+            # Read the revision first so an edit during review still makes the result stale.
+            if not keywords:
+                current = db.execute(select(Item.current, ItemReviewState.revision).join(ItemReviewState)
+                                     .where(Item.id == result.item_id)).one_or_none()
+                if current and current.current == fields:
+                    item_revision = current.revision
+            keyword = _current_keyword(db, fields)
+            if keyword is not None:
+                keywords.append(keyword_dict(keyword))
             db.commit()
         auth_failed = False
         try:

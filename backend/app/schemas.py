@@ -1,6 +1,6 @@
 from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
-from .keywords import ENTRY_DOMAIN, entry_key
+from .keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, entry_key
 
 COLUMNS = ["用例编号", "用例名称", "测试小项", "指标名称", "测试条件", "判据门限", "单位", "门限", "值", "备注", "附件链接"]
 
@@ -54,10 +54,12 @@ class KeywordChange(StrictModel):
 
     @model_validator(mode="after")
     def validate_entry_identity(self):
+        if self.domain == LEGACY_ENTRY_DOMAIN:
+            raise ValueError("旧四字段关键词已归档，请使用包含指标名称的词条")
         if self.domain == ENTRY_DOMAIN:
             payload = KeywordEntry.model_validate(self.payload).model_dump()
             if self.key != entry_key(payload):
-                raise ValueError("关键词标识与 a～d 联合主键不一致")
+                raise ValueError("关键词标识与 a～e 联合主键不一致")
         return self
 
 class KeywordEntry(StrictModel):
@@ -65,9 +67,10 @@ class KeywordEntry(StrictModel):
     b: str = Field(max_length=32767)
     c: str = Field(max_length=32767)
     d: str = Field(max_length=32767)
-    e: str = Field(min_length=1, max_length=32767)
+    e: str = Field(max_length=32767)
+    i: str = Field(min_length=1, max_length=32767)
 
-    @field_validator("e")
+    @field_validator("i")
     @classmethod
     def nonblank_keyword(cls, value):
         if not value.strip():

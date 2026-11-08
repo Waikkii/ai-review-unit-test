@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlparse
 from .config import settings
 from .schemas import ReviewVerdict
+from .keywords import ENTRY_DOMAIN, keyword_text
 from .auth_sessions import download_with_session, SessionAuthFailure
 
 class InvalidVerdict(ValueError):
@@ -24,8 +25,9 @@ def review(fields, keywords, username):
         return ReviewVerdict(status="needs_review", explanation="主观类"), {
             "system": True, "reason": "subjective"}
     payload = keywords[0].get("payload", {}) if len(keywords) == 1 else {}
-    keyword_value = payload.get("e")
-    if not keywords or (len(keywords) == 1 and (settings.local_review_module or "e" in payload)
+    keyword_value = keyword_text(keywords[0]) if len(keywords) == 1 else None
+    if not keywords or (len(keywords) == 1 and (settings.local_review_module or "e" in payload
+                        or keywords[0].get("domain") == ENTRY_DOMAIN)
                         and (not isinstance(keyword_value, str) or not keyword_value.strip())):
         return ReviewVerdict(status="missing_keyword", explanation="缺少关键词",
                              suggestion="请补充关键词并生效后执行查漏补缺。"), {
@@ -66,9 +68,9 @@ def review(fields, keywords, username):
         return validated
 
     local = importlib.import_module(settings.local_review_module)
-    if len(keywords) > 1 or not isinstance(keywords[0]["payload"].get("e"), str):
-        raise ValueError("本地审查需要唯一的五字段关键词记录")
-    keyword = keywords[0]["payload"]["e"]
+    if len(keywords) > 1:
+        raise ValueError("本地审查需要唯一的关键词记录")
+    keyword = keyword_value
     try:
         output = local.review_item(fields.get("单位", ""), keyword, attachment_url,
                                    fields.get("判据门限", ""), fields.get("门限", ""),

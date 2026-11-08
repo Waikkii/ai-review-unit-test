@@ -25,7 +25,7 @@ def read_metrics(path):
             if sheet.title.strip() in {"封面", "目录"}:
                 continue
             section = None
-            for row in sheet.iter_rows(max_row=min(sheet.max_row, 60)):
+            for row in sheet.iter_rows():
                 labels = ["".join(str(cell.value or "").split()) for cell in row]
                 if "测试详情" in labels:
                     section = row[0].row

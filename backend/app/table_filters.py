@@ -17,7 +17,7 @@ def table_page(rows, filters, offset, limit, keywords, is_run):
             raise ValueError()
     except (ValueError, TypeError):
         raise HTTPException(422, '表格筛选格式无效') from None
-    index = {tuple(k.payload.get(key, '') for key in KEY_FIELDS): str(k.payload.get('e', ''))
+    index = {tuple(k.payload.get(key) for key in KEY_FIELDS): k.payload['i']
              for k in keywords if k.domain == ENTRY_DOMAIN and not k.deleted}
     decorated = []
     for row in rows:
@@ -28,7 +28,7 @@ def table_page(rows, filters, offset, limit, keywords, is_run):
         visible = result and not pending
         values = {'domain': row['domain'], 'state': '待审查' if row['pending_review'] else '已审查',
                   'note': row.get('note', ''),
-                  'keyword': index.get(tuple(fields.get(name, '') for name in KEY_FIELDS.values()), '未配置'),
+                  'keyword': index.get(tuple(fields.get(name) for name in KEY_FIELDS.values()), '未配置'),
                   'ai_threshold': result.get('ai_threshold', '') if visible else '',
                   'ai_value': result.get('ai_value', '') if visible else '',
                   'result': result.get('result_label', '') if visible and result['status'] != 'pending' else '待审查'}

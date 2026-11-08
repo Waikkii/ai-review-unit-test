@@ -4,7 +4,7 @@ from .config import settings
 from .db import uid
 from .models import Item, ItemReviewState, Result, ResultWork, ResultMeasurements, Run, RunControl, Keyword, Report, RunRetainedItem, RunItemReviewState
 from .reviewer import rule_version
-from .keywords import ENTRY_DOMAIN, matches_entry
+from .keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, KEY_FIELDS
 
 ACTIVE_STATES = ("queued", "running", "pausing", "paused")
 
@@ -84,7 +84,8 @@ def create_run(db, report, actor, selection_mode, base_run=None):
     chosen_ids = {item.id for item, _ in chosen}
     if not chosen:
         raise HTTPException(409, "没有待审查的测试项")
-    snapshots = [keyword_dict(k) for k in db.scalars(select(Keyword).where(Keyword.deleted.is_(False)))]
+    snapshots = [keyword_dict(k) for k in db.scalars(select(Keyword).where(
+        Keyword.deleted.is_(False), Keyword.domain != LEGACY_ENTRY_DOMAIN))]
     run = Run(id=uid(), report_id=report.id, actor_id=actor.id, revision=report.revision,
               total=len(chosen), keyword_snapshot=snapshots, completed=0, failed=0,
               model="demo" if settings.app_mode == "demo" else settings.review_model,
@@ -121,15 +122,24 @@ def create_run(db, report, actor, selection_mode, base_run=None):
 def invalidate_keyword_items(db, keyword):
     """Only effective keyword changes invalidate work; pending approval does not."""
     if keyword.domain == ENTRY_DOMAIN:
-        # Match decoded JSON: SQLite JSON paths differ for escaped Chinese keys.
-        ids = [item_id for item_id, fields in db.execute(select(Item.id, Item.current)).yield_per(500)
-               if matches_entry(keyword.payload, fields)]
-        for offset in range(0, len(ids), 500):
-            db.execute(update(ItemReviewState).where(ItemReviewState.item_id.in_(ids[offset:offset + 500]))
-                       .values(revision=ItemReviewState.revision + 1))
-            db.execute(update(RunItemReviewState).where(RunItemReviewState.item_id.in_(ids[offset:offset + 500])).values(pending=True, stale=True))
+        invalidate_keyword_entries(db, [keyword.payload])
     else:
         db.execute(update(ItemReviewState).where(ItemReviewState.item_id.in_(
             select(Item.id).where(Item.domain == keyword.domain))).values(revision=ItemReviewState.revision + 1))
         db.execute(update(RunItemReviewState).where(RunItemReviewState.item_id.in_(
             select(Item.id).where(Item.domain == keyword.domain))).values(pending=True, stale=True))
+
+
+def invalidate_keyword_entries(db, payloads):
+    keys = {tuple(payload[key] for key in KEY_FIELDS) for payload in payloads}
+    if not keys:
+        return
+    # Match decoded JSON: SQLite JSON paths differ for escaped Chinese keys.
+    ids = [item_id for item_id, fields in db.execute(select(Item.id, Item.current)).yield_per(500)
+           if tuple(fields.get(name) for name in KEY_FIELDS.values()) in keys]
+    for offset in range(0, len(ids), 500):
+        batch = ids[offset:offset + 500]
+        db.execute(update(ItemReviewState).where(ItemReviewState.item_id.in_(batch))
+                   .values(revision=ItemReviewState.revision + 1))
+        db.execute(update(RunItemReviewState).where(RunItemReviewState.item_id.in_(batch))
+                   .values(pending=True, stale=True))
