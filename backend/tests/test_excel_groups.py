@@ -98,6 +98,92 @@ def test_formula_in_second_group_is_not_silently_ignored():
         parse_excel(serialize(book))
 
 
+def multi_round_workbook(rounds=3):
+    book, sheet = two_group_workbook()
+    sheet.title = "领域3"
+    # 每轮两组；保留原有供应商分组标签。
+    for index in range(1, rounds):
+        begin = 9 + index * 8
+        sheet.merge_cells(start_row=15, end_row=16, start_column=begin, end_column=begin + 7)
+        sheet.cell(15, begin, f"第{index + 1}轮")
+        for offset in (0, 4):
+            for col, name in enumerate(COLUMNS[7:], begin + offset):
+                sheet.cell(17, col, name)
+            sheet.merge_cells(start_row=18, end_row=18, start_column=begin + offset, end_column=begin + offset + 3)
+            sheet.cell(18, begin + offset, f"供应商-{index}-{offset}")
+            for row in (19, 20):
+                sheet.cell(row, begin + offset, f"门限-{index}-{offset}")
+                sheet.cell(row, begin + offset + 1, 0 if row == 19 else f"值-{index}-{offset}")
+                sheet.cell(row, begin + offset + 3, "附件").hyperlink = f"https://intranet/round-{index}-{offset}.png"
+    return book, sheet
+
+
+def test_multiple_rounds_upload_review_export(client, headers, monkeypatch):
+    book, sheet = multi_round_workbook()
+    original = serialize(book)
+    parsed = parse_excel(original)
+    assert len(parsed) == 14
+    assert len({(r['row_number'], r['source_group']) for r in parsed}) == 14
+    assert parsed[0]['source_label'] == '第一轮 / A'
+    assert parsed[2]['source_label'] == '第2轮 / 供应商-1-0'
+    h = headers()
+    response = client.post('/api/reports', headers=h, files={'file': ('rounds.xlsx', original)})
+    assert response.status_code == 201, response.text
+    report = response.json()
+    def review(fields, keywords, username):
+        return ReviewVerdict(status='passed', explanation='通过', ai_threshold=fields['门限'], ai_value=fields['值']), {}
+    monkeypatch.setattr('app.worker.review', review)
+    run = client.post(f'/api/reports/{report["id"]}/runs', headers=h).json()
+    assert run['total'] == 14
+    assert process_once()
+    response = client.get(f'/api/runs/{run["id"]}/export', headers=h)
+    assert response.status_code == 200, response.text
+    exported = load_workbook(BytesIO(response.content))
+    sheet = exported['领域3']
+    assert [sheet.cell(15, col).value for col in (9, 17, 25, 33, 41, 49)] == [
+        '第一轮', '第一轮AI审查', '第2轮', '第2轮AI审查', '第3轮', '第3轮AI审查']
+    for index, row in enumerate(parsed):
+        group = row['source_group']
+        col = 17 + (group // 2) * 16 + (group % 2) * 4
+        assert sheet.cell(row['row_number'], col).value == row['fields']['门限']
+        assert sheet.cell(row['row_number'], col + 1).value == row['fields']['值']
+        assert sheet.cell(row['row_number'], col + 2).value == '通过'
+    assert sheet['AB19'].hyperlink.target == 'https://intranet/round-1-0.png'
+    assert sheet['AO19'].value == '门限-2-0'
+    before = load_workbook(BytesIO(original))
+    for row in before['领域3']:
+        for cell in row:
+            col = cell.column
+            shifted = col if col < 9 else col + ((col - 9) // 8) * 8
+            output = sheet.cell(cell.row, shifted)
+            assert output.value == cell.value
+            assert output.style_id == cell.style_id
+            assert (output.hyperlink.target if output.hyperlink else None) == (cell.hyperlink.target if cell.hyperlink else None)
+    before.close()
+    exported.close()
+
+
+def test_later_round_invalid_header_and_formula_are_rejected():
+    book, sheet = multi_round_workbook()
+    sheet['R19'] = '=1+1'
+    with pytest.raises(ValueError, match='公式转成值'):
+        parse_excel(serialize(book))
+    book, sheet = multi_round_workbook()
+    sheet['R17'] = '其他列'
+    with pytest.raises(ValueError, match='R17应为值'):
+        parse_excel(serialize(book))
+
+
+def test_round_labels_without_supplier_names_use_local_group_numbers():
+    book, sheet = multi_round_workbook()
+    for col in (9, 13, 17, 21, 25, 29):
+        sheet.cell(18, col).value = None
+    rows = parse_excel(serialize(book))
+    assert [row['source_label'] for row in rows[:6]] == [
+        '第一轮 / 第1组', '第一轮 / 第2组', '第2轮 / 第1组', '第2轮 / 第2组',
+        '第3轮 / 第1组', '第3轮 / 第2组']
+
+
 def test_export_restores_group_positions_styles_merges_and_blanks():
     book, _ = two_group_workbook()
     original = serialize(book)

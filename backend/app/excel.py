@@ -2,7 +2,7 @@ from io import BytesIO
 from zipfile import ZipFile, BadZipFile
 import re
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from .schemas import COLUMNS
@@ -16,6 +16,7 @@ class DetailLayout:
     groups: list
     start: int
     end: int
+    regions: list = field(default_factory=list)
 
 
 def header_text(value):
@@ -87,13 +88,29 @@ def detail_header(sheet):
                 if right < max(columns.values()) or (right - left + 1) % 4:
                     failures.append((3, f"数据区有 {right - left + 1} 列，须按“门限、值、备注、附件链接”四列完整分组"))
                     continue
-                groups = [dict(zip(COLUMNS[7:], range(col, col + 4))) for col in range(left, right + 1, 4)]
+                regions_to_read = [(left, right, "")]
+                if sections:
+                    # 只有明确标为轮次的连续区域才扩展；其他业务区及已有 AI 区不纳入。
+                    round_pattern = r"第[一二三四五六七八九十百零〇两0-9]+轮"
+                    title = header_text(sheet.cell(first, left).value)
+                    if re.fullmatch(round_pattern, title):
+                        regions_to_read = [(left, right, title)]
+                        for area in sorted(other_headers, key=lambda a: a.min_col):
+                            label = header_text(sheet.cell(first, area.min_col).value)
+                            if area.min_col != regions_to_read[-1][1] + 1 or not re.fullmatch(round_pattern, label):
+                                break
+                            regions_to_read.append((area.min_col, area.max_col, label))
+                    if any((end - begin + 1) % 4 for begin, end, _ in regions_to_read):
+                        failures.append((3, "每轮数据区须按“门限、值、备注、附件链接”四列完整分组"))
+                        continue
+                groups = [dict(zip(COLUMNS[7:], range(col, col + 4)))
+                          for begin, end, _ in regions_to_read for col in range(begin, end + 1, 4)]
                 wrong = [(name, sheet.cell(bottom, col).coordinate) for group in groups for name, col in group.items()
                          if header_text(sheet.cell(bottom, col).value) != name]
                 if wrong:
                     failures.append((4, "第三行明细字段缺失或错位：" + "、".join(f"{coord}应为{name}" for name, coord in wrong)))
                     continue
-                return DetailLayout(first, bottom, columns, groups, left, right)
+                return DetailLayout(first, bottom, columns, groups, left, regions_to_read[-1][1], regions_to_read)
             else:
                 missing = [name for name, cols in positions.items() if len(cols) != 1]
                 score = sum(bool(cols) for cols in positions.values())
@@ -160,6 +177,10 @@ def parse_excel(content):
                                 raise ValueError(f"{sheet.title} 第 {row} 行 第 {index + 1} 组 {name}: 请将公式转成值后上传")
                         values[name] = "" if value is None else str(value)
                     label = group_labels[index] or f"第{index + 1}组" if len(layout.groups) > 1 else ""
+                    if len(layout.regions) > 1:
+                        begin, end, round_label = next(region for region in layout.regions if region[0] <= start <= region[1])
+                        label = group_labels[index] or (f"第{(start - begin) // 4 + 1}组" if end - begin + 1 > 4 else "")
+                        label = f"{round_label} / {label}" if label else round_label
                     parsed.append({"domain": sheet.title, "row_number": row, "fields": values,
                                    "source_group": index, "source_label": label})
                     if len(parsed) > settings.max_items:
@@ -184,6 +205,11 @@ def _insert_columns(sheet, at, count):
     for area in merges:
         sheet.unmerge_cells(str(area))
     sheet.insert_cols(at, count)
+    # openpyxl 移动单元格时不会同步超链接 ref；保存时旧坐标会把链接写到其他轮次。
+    for row in sheet.iter_rows(min_col=at + count):
+        for cell in row:
+            if cell.hyperlink:
+                cell.hyperlink.ref = cell.coordinate
     for area in merges:
         left = area.min_col + (count if area.min_col >= at else 0)
         right = area.max_col + (count if area.max_col >= at else 0)
@@ -261,9 +287,22 @@ def export_excel(original, run, results, measurements=None, notes=None, sources=
             if sheet.title not in domains:
                 continue
             layout = detail_header(sheet)
-            outputs[sheet.title] = (layout, _add_review_area(sheet, layout))
+            targets = {}
+            # 从右向左插入，保持尚未处理的源列坐标不变。
+            for begin, end, title in reversed(layout.regions):
+                groups = [group for group in layout.groups if begin <= group["门限"] <= end]
+                region = replace(layout, start=begin, end=end, groups=groups)
+                target = _add_review_area(sheet, region)
+                width = end - begin + 1
+                targets = {index: col + width for index, col in targets.items()}
+                if len(layout.regions) > 1:
+                    sheet.cell(layout.top, target, title + "AI审查")
+                for index, group in enumerate(layout.groups):
+                    if begin <= group["门限"] <= end:
+                        targets[index] = target + group["门限"] - begin
+            outputs[sheet.title] = (layout, targets)
         for result in results:
-            layout, target = outputs[result.domain]
+            layout, targets = outputs[result.domain]
             group = sources.get(result.item_id, 0)
             if not 0 <= group < len(layout.groups):
                 raise ValueError(f"{result.domain} 第 {result.row_number} 行: 审查分组与原始报告不一致")
@@ -272,9 +311,10 @@ def export_excel(original, run, results, measurements=None, notes=None, sources=
                       measured.ai_value if measured and result.status != "pending" else "",
                       stored_result_label(result.status, result.explanation) if result.status != "pending" else "",
                       notes.get(result.item_id, "")]
-            for col, value in enumerate(values, target + group * 4):
+            target = targets[group]
+            for col, value in enumerate(values, target):
                 cell = workbook[result.domain].cell(result.row_number, col, safe_cell(value))
-                if col == target + group * 4 + 2:
+                if col == target + 2:
                     # 结果文本常比原来的备注长，保留列宽、行高并让 Excel 缩小显示以免截断。
                     alignment = copy(cell.alignment)
                     alignment.shrinkToFit = True
