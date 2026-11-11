@@ -25,7 +25,7 @@ def header_text(value):
 
 
 def detail_header(sheet):
-    """按表头结构识别最左侧数据区，分组标题文字不限。"""
+    """按表头结构识别所有原始数据区，分组标题文字不限。"""
     sections = [cell.row for row in sheet.iter_rows() for cell in row
                 if header_text(cell.value) == "测试详情"]
     if len(sections) > 1:
@@ -90,16 +90,17 @@ def detail_header(sheet):
                     continue
                 regions_to_read = [(left, right, "")]
                 if sections:
-                    # 只有明确标为轮次的连续区域才扩展；其他业务区及已有 AI 区不纳入。
-                    round_pattern = r"第[一二三四五六七八九十百零〇两0-9]+轮"
-                    title = header_text(sheet.cell(first, left).value)
-                    if re.fullmatch(round_pattern, title):
-                        regions_to_read = [(left, right, title)]
-                        for area in sorted(other_headers, key=lambda a: a.min_col):
-                            label = header_text(sheet.cell(first, area.min_col).value)
-                            if area.min_col != regions_to_read[-1][1] + 1 or not re.fullmatch(round_pattern, label):
-                                break
-                            regions_to_read.append((area.min_col, area.max_col, label))
+                    regions_to_read = [(left, right, header_text(sheet.cell(first, left).value))]
+                    for area in sorted(other_headers, key=lambda a: a.min_col):
+                        names = [header_text(sheet.cell(bottom, col).value)
+                                 for col in range(area.min_col, area.max_col + 1)]
+                        # AI 区使用“结果”列；只按原始四列结构识别，标题可以为空。
+                        if names == ["门限", "值", "结果", "备注"] * (len(names) // 4):
+                            continue
+                        if not any(name in COLUMNS[7:] for name in names):
+                            continue
+                        regions_to_read.append((area.min_col, area.max_col,
+                                                header_text(sheet.cell(first, area.min_col).value)))
                     if any((end - begin + 1) % 4 for begin, end, _ in regions_to_read):
                         failures.append((3, "每轮数据区须按“门限、值、备注、附件链接”四列完整分组"))
                         continue
@@ -178,7 +179,9 @@ def parse_excel(content):
                         values[name] = "" if value is None else str(value)
                     label = group_labels[index] or f"第{index + 1}组" if len(layout.groups) > 1 else ""
                     if len(layout.regions) > 1:
-                        begin, end, round_label = next(region for region in layout.regions if region[0] <= start <= region[1])
+                        region_index, (begin, end, round_label) = next(
+                            (i, region) for i, region in enumerate(layout.regions) if region[0] <= start <= region[1])
+                        round_label = round_label or f"第{region_index + 1}区"
                         label = group_labels[index] or (f"第{(start - begin) // 4 + 1}组" if end - begin + 1 > 4 else "")
                         label = f"{round_label} / {label}" if label else round_label
                     parsed.append({"domain": sheet.title, "row_number": row, "fields": values,
@@ -296,7 +299,7 @@ def export_excel(original, run, results, measurements=None, notes=None, sources=
                 width = end - begin + 1
                 targets = {index: col + width for index, col in targets.items()}
                 if len(layout.regions) > 1:
-                    sheet.cell(layout.top, target, title + "AI审查")
+                    sheet.cell(layout.top, target, (title or f"第{layout.regions.index((begin, end, title)) + 1}区") + "AI审查")
                 for index, group in enumerate(layout.groups):
                     if begin <= group["门限"] <= end:
                         targets[index] = target + group["门限"] - begin

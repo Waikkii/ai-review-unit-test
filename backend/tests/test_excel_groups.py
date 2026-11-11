@@ -67,15 +67,16 @@ def test_group_title_text_is_unrestricted_in_upload_and_export(client, headers, 
     book, sheet = two_group_workbook()
     sheet.title = 'USB接口'
     sheet['I15'] = title
-    # A later section literally called 第一轮 must not replace the leftmost input section.
+    # 标题任意，各个完整原始数据区都应解析。
     sheet.merge_cells('Q15:T16')
-    sheet['Q15'] = '第一轮'
+    sheet['Q15'] = '复测数据'
     for col, name in enumerate(COLUMNS[7:], 17):
         sheet.cell(17, col, name)
-    sheet['R19'] = '不应读取右侧其他区'
+    sheet['R19'] = '右侧也应审查'
     content = serialize(book)
     parsed = parse_excel(content)
-    assert len(parsed) == 6
+    assert len(parsed) == 7
+    assert parsed[2]['fields']['值'] == '右侧也应审查'
     assert [r['fields']['值'] for r in parsed[:2]] == ['0', '21']
     uploaded = client.post('/api/reports', headers=h, files={'file': ('usb.xlsx', content)})
     assert uploaded.status_code == 201, uploaded.text
@@ -85,9 +86,11 @@ def test_group_title_text_is_unrestricted_in_upload_and_export(client, headers, 
     assert response.status_code == 200, response.text
     output = load_workbook(BytesIO(response.content))
     assert output['USB接口']['I15'].value == (title or None)
-    assert output['USB接口']['Q15'].value == 'AI审查'
-    assert output['USB接口']['Y15'].value == '第一轮'
-    assert output['USB接口']['Z19'].value == '不应读取右侧其他区'
+    assert output['USB接口']['Q15'].value == (title or '第1区') + 'AI审查'
+    assert output['USB接口']['Y15'].value == '复测数据'
+    assert output['USB接口']['AC15'].value == '复测数据AI审查'
+    assert output['USB接口']['AE19'].value == '缺少附件'
+    assert output['USB接口']['Z19'].value == '右侧也应审查'
     output.close()
 
 
@@ -118,14 +121,18 @@ def multi_round_workbook(rounds=3):
     return book, sheet
 
 
-def test_multiple_rounds_upload_review_export(client, headers, monkeypatch):
+@pytest.mark.parametrize("titles", [("第一轮", "第2轮", "第3轮"), ("初测", "整改复验", ""), ("", "", "")])
+def test_multiple_rounds_upload_review_export(client, headers, monkeypatch, titles):
     book, sheet = multi_round_workbook()
+    for col, title in zip((9, 17, 25), titles):
+        sheet.cell(15, col).value = title
+    labels = [title or f"第{i + 1}区" for i, title in enumerate(titles)]
     original = serialize(book)
     parsed = parse_excel(original)
     assert len(parsed) == 14
     assert len({(r['row_number'], r['source_group']) for r in parsed}) == 14
-    assert parsed[0]['source_label'] == '第一轮 / A'
-    assert parsed[2]['source_label'] == '第2轮 / 供应商-1-0'
+    assert parsed[0]['source_label'] == labels[0] + ' / A'
+    assert parsed[2]['source_label'] == labels[1] + ' / 供应商-1-0'
     h = headers()
     response = client.post('/api/reports', headers=h, files={'file': ('rounds.xlsx', original)})
     assert response.status_code == 201, response.text
@@ -141,7 +148,7 @@ def test_multiple_rounds_upload_review_export(client, headers, monkeypatch):
     exported = load_workbook(BytesIO(response.content))
     sheet = exported['领域3']
     assert [sheet.cell(15, col).value for col in (9, 17, 25, 33, 41, 49)] == [
-        '第一轮', '第一轮AI审查', '第2轮', '第2轮AI审查', '第3轮', '第3轮AI审查']
+        value for title, label in zip(titles, labels) for value in (title or None, label + 'AI审查')]
     for index, row in enumerate(parsed):
         group = row['source_group']
         col = 17 + (group // 2) * 16 + (group % 2) * 4
@@ -161,6 +168,9 @@ def test_multiple_rounds_upload_review_export(client, headers, monkeypatch):
             assert (output.hyperlink.target if output.hyperlink else None) == (cell.hyperlink.target if cell.hyperlink else None)
     before.close()
     exported.close()
+    # 已导出的 AI 区不会被作为新的原始数据重复解析。
+    reparsed = parse_excel(response.content)
+    assert [(r['source_group'], r['fields']) for r in reparsed] == [(r['source_group'], r['fields']) for r in parsed]
 
 
 def test_later_round_invalid_header_and_formula_are_rejected():
