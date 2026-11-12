@@ -66,6 +66,16 @@ def test_detail_three_row_header_and_value_selection():
     assert rows[2]["fields"]["附件链接"] == "https://intranet.example/ok.jpg"
 
 
+@pytest.mark.parametrize('value', ['NA', 'na', 'Na', 'nA', '  NA\n'])
+def test_na_value_is_skipped_without_affecting_zero(value):
+    book, sheet = detail_workbook()
+    sheet['J21'] = value
+    sheet['D21'] = '=1+1'  # 被忽略项的其他字段也不进入解析。
+    rows = parse_excel(serialize(book))
+    assert [row['row_number'] for row in rows] == [20, 23]
+    assert rows[0]['fields']['值'] == '0'
+
+
 def test_three_row_header_accepts_display_whitespace_without_changing_data(client, headers):
     book, sheet = detail_workbook()
     sheet.title = "USB接口"

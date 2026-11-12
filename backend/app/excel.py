@@ -161,7 +161,7 @@ def parse_excel(content):
                         group_labels[index] = str(bands[row, start] or "")
                     columns = {**layout.shared, **group}
                     value_cell = merged.get((row, columns["值"]), sheet.cell(row, columns["值"]))
-                    if value_cell.value is None or not str(value_cell.value).strip():
+                    if value_cell.value is None or str(value_cell.value).strip().lower() in {"", "na"}:
                         continue
                     values = {}
                     for name, col in columns.items():
@@ -191,7 +191,7 @@ def parse_excel(content):
     finally:
         workbook.close()
     if not parsed:
-        raise ValueError("未发现测试详情中“值”非空的测试项")
+        raise ValueError("未发现测试详情中“值”非空且不为 NA 的测试项")
     return parsed
 
 def safe_cell(value):
