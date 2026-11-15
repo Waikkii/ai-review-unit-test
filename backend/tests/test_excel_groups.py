@@ -1,9 +1,10 @@
 from io import BytesIO
 from types import SimpleNamespace
+from copy import copy
 
 import pytest
 from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
 from sqlalchemy import select
 
 from app.db import Session
@@ -182,6 +183,43 @@ def test_later_round_invalid_header_and_formula_are_rejected():
     sheet['R17'] = '其他列'
     with pytest.raises(ValueError, match='R17应为值'):
         parse_excel(serialize(book))
+
+
+@pytest.mark.parametrize('link_style', ['Hyperlink', 'manual'])
+def test_export_notes_do_not_inherit_attachment_hyperlink_font(link_style):
+    book, sheet = multi_round_workbook(rounds=2)
+    for col in (12, 16, 20, 24):
+        attachment = sheet.cell(19, col, '查看附件')
+        attachment.hyperlink = f'https://intranet/attachment-{col}.png'
+        if link_style == 'Hyperlink':
+            attachment.style = link_style
+        else:
+            attachment.font = Font(name='Arial', color='FF0000FF', underline='single')
+        sheet.cell(19, col - 1).font = Font(name='Calibri', size=11, color='FF000000')
+    original = serialize(book)
+    parsed = parse_excel(original)
+    results, notes, sources = [], {}, {}
+    for index, row in enumerate(parsed):
+        key = str(index)
+        results.append(SimpleNamespace(id=key, item_id=key, domain=row['domain'],
+                                       row_number=row['row_number'], status='passed', explanation='通过'))
+        notes[key] = '普通用户备注'
+        sources[key] = row['source_group']
+    output = export_excel(original, None, results, notes=notes, sources=sources)
+    before, after = load_workbook(BytesIO(original)), load_workbook(BytesIO(output))
+    try:
+        for group in range(4):
+            original_attachment = before['领域3'].cell(19, 12 + group * 4)
+            shifted_attachment = after['领域3'].cell(19, 12 + group * 4 + (group // 2) * 8)
+            note = after['领域3'].cell(19, 20 + (group // 2) * 16 + (group % 2) * 4)
+            assert note.value == '普通用户备注' and note.hyperlink is None
+            assert note.font == copy(before['领域3'].cell(19, 11 + group * 4).font)
+            assert note.font.u is None
+            assert shifted_attachment.font == copy(original_attachment.font)
+            assert shifted_attachment.hyperlink.target == original_attachment.hyperlink.target
+    finally:
+        before.close()
+        after.close()
 
 
 def test_round_labels_without_supplier_names_use_local_group_numbers():

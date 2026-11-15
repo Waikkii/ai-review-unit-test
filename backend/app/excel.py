@@ -247,6 +247,9 @@ def _add_review_area(sheet, layout):
             source, cell = sheet.cell(row, col), sheet.cell(row, col + offset)
             cell._style = copy(source._style)
             cell.protection = copy(source.protection)
+            if (col - layout.start) % 4 == 3:
+                # AI 备注对应原附件列的位置，但字体应沿用原备注，避免继承超链接外观。
+                cell.font = copy(sheet.cell(row, col - 1).font)
     for area in merges:
         if area.min_col < layout.start or area.max_col > layout.end or area.min_row < layout.top:
             continue
