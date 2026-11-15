@@ -2,7 +2,7 @@
 
 登录和审查统一由被 Git 忽略的 backend/local_adapters 目录提供。
 
-- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password) 返回 {username, cookies}；fetchimage(url, cookies) 返回 [(base64_string, MIME), ...]。
+- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password, code=None) 返回 {username, cookies}，或在需要验证码时返回 {mfakey}；fetchimage(url, cookies) 返回 [(base64_string, MIME), ...]。
 - LOCAL_REVIEW_MODULE=local_adapters.review_rules：review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage) 返回 (ai_threshold, ai_value, result) 三个字符串，并提供 RULE_VERSION。兼容旧版 (verdict, raw) 返回格式。
 - attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[str, str]]]。
 - 自动判定优先级：无附件链接直接返回“缺少附件”；否则判据门限含中文汉字时返回“主观类”。两种情况均直接已审查，不调用本地模型/图片函数。其余测试项再按五字段匹配关键词，无关键词返回“缺少关键词”并保留待审查资格。
@@ -11,6 +11,28 @@
 - 规则变化时更新 RULE_VERSION，统一重启 API/Worker；整项执行时间应小于 LEASE_SECONDS（默认 300 秒）。
 - AI 请求由本地 review_item 实现；本机 `.env` 可配置 `MODEL` 和 `APPLY_TOKEN`，在函数中通过 `from app.config import settings` 读取 `settings.model`、`settings.apply_token`。令牌由本地函数按实际接口要求使用，框架不会自动添加请求头。`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 继续兼容，审查记录优先使用 `MODEL`，为空时使用 `AI_MODEL`。修改配置后需重启 API 和 Worker。
 - 旧适配器及其配置已移除，真实接入统一使用上述模块；原始模型结果、任务快照和至少一次调用语义保留。
+
+## 登录风控验证码
+
+无需验证时登录流程保持不变。需要验证时，私有适配器采用以下契约：
+
+```python
+def login(username: str, password: str, code: str | None = None) -> dict:
+    # 无 code 时正常登录；触发风控则返回 {"mfakey": "本次验证凭据"}。
+    # 有 code 时，由本地逻辑验证并登录，成功返回 {"username": "稳定账号", "cookies": {...}}。
+    ...
+
+def send_verify_code(mfakey: str, verification_type: str):
+    # verification_type 为 "phone" 或 "email"。
+    # 根据 mfakey 发送验证码；成功可返回 None，失败请抛出异常或返回 False。
+    ...
+```
+
+`POST /api/auth/login` 请求 `{username, password, code?}`。无验证码时仍只用两个参数调用旧适配器；有验证码时以 `code=...` 传入。返回 `{mfa_required: true, mfakey}` 时不创建账号、不签发令牌、不保存登录凭据。前端仅在当前页面内存保留输入的用户名、密码及 mfakey，并显示验证码输入框、发送按钮和手机/邮箱切换，默认选择手机。`POST /api/auth/send-verify-code` 请求 `{mfakey, type: "phone" | "email"}`，后端调用上述发送函数；点击后按钮倒计时 60 秒，发送失败或切换接收方式不会重置倒计时。倒计时是页面按钮控制，适配器应按实际认证系统约定处理凭据有效期、发送限制及验证失败。
+
+再次登录只额外传 code，不自动传 mfakey 给 login；若验证需要关联 mfakey，由私有适配器自行按账号维护验证上下文，避免不同用户互相覆盖。验证失败保留表单；成功后清空页面密码、验证码及 mfakey，仅后端加密保存账号密码和 Cookie，不保存验证码。修改账号或密码会取消当前验证界面，重新执行登录。已有适配器无须修改即可继续普通双参数登录；启用验证码时需自行更新私有适配器，本仓库不会覆盖真实接入代码。
+
+后台 Cookie 自动刷新仍只调用双参数 login；若此时返回 mfakey，批次按原认证失败流程阻塞，需用户重新登录并完成验证码后再继续，不会在 Worker 自动发送验证码。
 
 SQLite 源关键词表使用 A/B/C/D/E 联合主键，E 是指标名称，I 是单个关键词。
 POST /api/keyword-entry-requests 使用 {action, entry:{a,b,c,d,e,i}, base_version, reason, result_id?}。

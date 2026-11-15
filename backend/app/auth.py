@@ -11,14 +11,29 @@ from .models import User
 
 bearer = HTTPBearer(auto_error=False)
 
-def authenticate(username, password):
+def authenticate(username, password, code=None):
     if settings.app_mode == "demo":
         if username not in {"demo", "admin"} or not compare_digest(password, settings.demo_password):
             raise ValueError("invalid credentials")
         return {"username": username}
     from .auth_sessions import validate_identity
-    identity = validate_identity(importlib.import_module(settings.local_auth_module).login(username, password))
+    adapter = importlib.import_module(settings.local_auth_module)
+    # 没有验证码时保留原来的双参数调用，兼容已有私有适配器。
+    identity = adapter.login(username, password) if code is None else adapter.login(username, password, code=code)
+    if isinstance(identity, dict) and "mfakey" in identity:
+        key = identity["mfakey"]
+        if not isinstance(key, str) or not key.strip() or len(key) > 4096:
+            raise ValueError("Invalid MFA challenge")
+        return {"mfa_required": True, "mfakey": key}
+    identity = validate_identity(identity)
     return {"username": identity["username"], "_session_cookies": identity["cookies"]}
+
+def send_verify_code(mfakey, verification_type):
+    if settings.app_mode == "demo":
+        raise ValueError("MFA unavailable in demo mode")
+    result = importlib.import_module(settings.local_auth_module).send_verify_code(mfakey, verification_type)
+    if result is False:
+        raise ValueError("Verification code delivery failed")
 
 def issue_token(user):
     return jwt.encode({"sub": user.id, "exp": now() + timedelta(minutes=settings.token_minutes),

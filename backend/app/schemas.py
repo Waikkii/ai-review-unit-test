@@ -10,6 +10,11 @@ class StrictModel(BaseModel):
 class Login(StrictModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=1024)
+    code: str | None = Field(default=None, min_length=1, max_length=128)
+
+class SendVerifyCode(StrictModel):
+    mfakey: str = Field(min_length=1, max_length=4096)
+    type: Literal["phone", "email"]
 
 class ItemEdit(StrictModel):
     version: int = Field(ge=1)

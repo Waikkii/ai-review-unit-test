@@ -141,7 +141,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch("/api" + path, { ...init, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "请求失败" }));
-    if (res.status === 401) window.dispatchEvent(new Event("session-expired"));
+    if (res.status === 401 && token) window.dispatchEvent(new Event("session-expired"));
     throw new Error(
       typeof body.detail === "string"
         ? body.detail
@@ -349,6 +349,22 @@ function App() {
     [mode, setMode] = useState("");
   const [name, setName] = useState(""),
     [password, setPassword] = useState("");
+  const [mfakey, setMfakey] = useState("");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyType, setVerifyType] = useState<"phone" | "email">("phone");
+  const [resendAt, setResendAt] = useState(0);
+  const [resendSeconds, setResendSeconds] = useState(0);
+  useEffect(() => {
+    if (!resendAt) return;
+    const update = () => {
+      const remaining = Math.max(0, Math.ceil((resendAt - Date.now()) / 1000));
+      setResendSeconds(remaining);
+      if (!remaining) setResendAt(0);
+    };
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [resendAt]);
   const [tab, setTab] = useState("reports"),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -429,6 +445,8 @@ function App() {
       token = "";
       setUser(null);
       setPassword("");
+      setMfakey("");
+      setVerifyCode("");
       setSelected(null);
       setRun(null);
       setReports([]);
@@ -753,18 +771,28 @@ function App() {
           onSubmit={(e) => {
             e.preventDefault();
             void act(async () => {
-              const res = await api<{
+              const res = await api<{ mfa_required: true; mfakey: string } | {
                 access_token: string;
                 user: User;
                 mode: string;
               }>("/auth/login", {
                 method: "POST",
-                body: json({ username: name, password }),
+                body: json({ username: name, password, ...(mfakey ? { code: verifyCode.trim() } : {}) }),
               });
+              if ("mfa_required" in res) {
+                setMfakey(res.mfakey);
+                setVerifyCode("");
+                return;
+              }
               token = res.access_token;
               setUser(res.user);
               setMode(res.mode);
               setPassword("");
+              setMfakey("");
+              setVerifyCode("");
+              setResendAt(0);
+              setResendSeconds(0);
+              setVerifyType("phone");
               setTab("reports");
             });
           }}
@@ -774,8 +802,9 @@ function App() {
             <input
               required
               autoComplete="username"
+              disabled={busy}
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => { setName(e.target.value); setMfakey(""); setVerifyCode(""); }}
             />
           </label>
           <label>
@@ -784,14 +813,39 @@ function App() {
               required
               type="password"
               autoComplete="current-password"
+              disabled={busy}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); setMfakey(""); setVerifyCode(""); }}
             />
           </label>
+          {mfakey && <div className="login-verification">
+            <p className="muted">本次登录需要验证，请获取并输入验证码。</p>
+            <div className="verification-row">
+              <input aria-label="验证码" placeholder="验证码" autoComplete="one-time-code"
+                required maxLength={128} value={verifyCode} disabled={busy}
+                onChange={e => setVerifyCode(e.target.value)} />
+              <button type="button" disabled={busy || resendSeconds > 0} onClick={() => {
+                if (busy || Date.now() < resendAt) return;
+                setResendAt(Date.now() + 60000);
+                setResendSeconds(60);
+                void act(async () => {
+                  await api("/auth/send-verify-code", { method: "POST", body: json({ mfakey, type: verifyType }) });
+                  setNotice("验证码已发送，请查收" + (verifyType === "phone" ? "手机短信" : "邮箱"));
+                });
+              }}>{resendSeconds > 0 ? `${resendSeconds}s 后重发` : "发送验证码"}</button>
+              <div className="verification-type" role="group" aria-label="验证码接收方式">
+                {([['phone', '手机'], ['email', '邮箱']] as const).map(([value, label]) =>
+                  <button key={value} type="button" aria-pressed={verifyType === value}
+                    disabled={busy}
+                    onClick={() => { setVerifyType(value); setVerifyCode(""); setNotice(""); }}>{label}</button>)}
+              </div>
+            </div>
+          </div>}
           <button className="primary" disabled={busy}>
             登录系统
           </button>
         </form>
+        {notice && <p role="status" className="muted">{notice}</p>}
         {error && (
           <p role="alert" className="error">
             {error}

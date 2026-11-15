@@ -690,6 +690,34 @@ pre {
 .login button {
   margin-top: 8px;
 }
+.verification-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.verification-row input {
+  min-width: 0;
+  flex: 1;
+}
+.login .verification-row button {
+  margin: 0;
+  padding: 8px;
+  white-space: nowrap;
+}
+.verification-type {
+  display: flex;
+}
+.verification-type button:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.verification-type button:last-child {
+  border-radius: 0 7px 7px 0;
+}
+.verification-type button[aria-pressed="true"] {
+  background: #146d69;
+  border-color: #146d69;
+  color: #fff;
+}
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,

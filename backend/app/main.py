@@ -10,9 +10,9 @@ from sqlalchemy.exc import IntegrityError
 from .config import settings, ROOT
 from .db import get_db, uid, now
 from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential, RunRetainedItem
-from .schemas import Login, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
+from .schemas import Login, SendVerifyCode, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, entry_key, matches_entry
-from .auth import authenticate, issue_token, current_user, admin_user
+from .auth import authenticate, send_verify_code, issue_token, current_user, admin_user
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
@@ -63,7 +63,9 @@ def health():
 @app.post("/api/auth/login")
 def login(data: Login, db=Depends(get_db)):
     try:
-        identity = authenticate(data.username, data.password)
+        identity = authenticate(data.username, data.password, data.code)
+        if identity.get("mfa_required"):
+            return identity
         name = identity["username"]
         if not isinstance(name, str) or not name.strip() or len(name) > 128:
             raise ValueError()
@@ -84,6 +86,14 @@ def login(data: Login, db=Depends(get_db)):
     db.commit()
     return {"access_token": issue_token(user), "token_type": "bearer",
             "user": serial(user, "id username role active"), "mode": settings.app_mode}
+
+@app.post("/api/auth/send-verify-code")
+def request_verify_code(data: SendVerifyCode):
+    try:
+        send_verify_code(data.mfakey, data.type)
+    except Exception:
+        raise HTTPException(400, "验证码发送失败，请稍后重试或联系管理员") from None
+    return {"ok": True}
 
 @app.get("/api/auth/me")
 def me(user=Depends(current_user)):
