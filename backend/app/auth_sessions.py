@@ -25,6 +25,25 @@ class SessionAuthFailure(Exception):
         super().__init__(AUTH_FAILURE_MESSAGE)
 
 
+class AuthenticationRejected(ValueError):
+    """适配器明确返回的、允许向登录用户展示的失败原因。"""
+
+
+def unwrap_login_result(response):
+    if isinstance(response, dict) and "result" in response:
+        if response["result"] == "fail":
+            reason = response.get("reason")
+            if not isinstance(reason, str) or not reason.strip() or len(reason) > 2000:
+                raise ValueError("Invalid authentication failure reason")
+            raise AuthenticationRejected(reason)
+        if response["result"] == "verify":
+            return {"mfakey": response.get("mfakey")}
+        if response["result"] != "success" or not isinstance(response.get("info"), dict):
+            raise ValueError("Invalid authentication result")
+        return response["info"]
+    return response
+
+
 def _cipher():
     if len(settings.secret_key) < 32:
         raise SessionAuthFailure()
@@ -33,6 +52,7 @@ def _cipher():
 
 
 def validate_identity(identity):
+    identity = unwrap_login_result(identity)
     if not isinstance(identity, dict) or not isinstance(identity.get("username"), str):
         raise ValueError("Invalid authentication identity")
     cookies = identity.get("cookies")

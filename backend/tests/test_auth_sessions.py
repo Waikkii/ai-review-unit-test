@@ -13,7 +13,7 @@ from app.worker import process_once
 from test_workflow import upload
 
 
-def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=False):
+def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=False, wrapped=False):
     module = types.ModuleType("fake_auth_sessions")
     calls = {"login": [], "fetch": []}
 
@@ -21,7 +21,8 @@ def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=Fa
         calls["login"].append((username, password))
         if fail_login:
             raise RuntimeError("do-not-expose-password")
-        return {"username": "demo", "cookies": {"session": "fresh-cookie-secret"}}
+        identity = {"username": "demo", "cookies": {"session": "fresh-cookie-secret"}}
+        return {"result": "success", "info": identity} if wrapped else identity
 
     def fetch(url, cookies):
         calls["fetch"].append(cookies)
@@ -41,8 +42,9 @@ def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=Fa
 
 
 @pytest.mark.parametrize("initial_valid", [True, False])
-def test_cookies_reused_or_refreshed_once_and_only_encrypted_at_rest(client, monkeypatch, initial_valid):
-    calls = adapter(monkeypatch, initial_valid=initial_valid)
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_cookies_reused_or_refreshed_once_and_only_encrypted_at_rest(client, monkeypatch, initial_valid, wrapped):
+    calls = adapter(monkeypatch, initial_valid=initial_valid, wrapped=wrapped)
     result = download_with_session("http://intranet.example/a.jpg", "demo")
     assert result[0][1] == "image/jpeg"
     assert len(calls["fetch"]) == (1 if initial_valid else 2)

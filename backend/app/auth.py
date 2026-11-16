@@ -16,10 +16,11 @@ def authenticate(username, password, code=None):
         if username not in {"demo", "admin"} or not compare_digest(password, settings.demo_password):
             raise ValueError("invalid credentials")
         return {"username": username}
-    from .auth_sessions import validate_identity
+    from .auth_sessions import validate_identity, unwrap_login_result
     adapter = importlib.import_module(settings.local_auth_module)
     # 没有验证码时保留原来的双参数调用，兼容已有私有适配器。
     identity = adapter.login(username, password) if code is None else adapter.login(username, password, code=code)
+    identity = unwrap_login_result(identity)
     if isinstance(identity, dict) and "mfakey" in identity:
         key = identity["mfakey"]
         if not isinstance(key, str) or not key.strip() or len(key) > 4096:

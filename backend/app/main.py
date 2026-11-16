@@ -20,7 +20,7 @@ from .audit_view import SUMMARY_ACTIONS, describe_activity
 from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, work_results, run_json as workflow_run_json
 from .models import RunItemReviewState
 from .history_state import pending_expression, is_history_pending
-from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE
+from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE, AuthenticationRejected
 from .result_filters import effective_result_expressions
 
 log = logging.getLogger(__name__)
@@ -69,6 +69,8 @@ def login(data: Login, db=Depends(get_db)):
         name = identity["username"]
         if not isinstance(name, str) or not name.strip() or len(name) > 128:
             raise ValueError()
+    except AuthenticationRejected as exc:
+        raise HTTPException(401, str(exc)) from None
     except Exception:
         raise HTTPException(401, "用户名或密码错误，或内网认证服务不可用")
     user = db.scalar(select(User).where(User.username == name))
