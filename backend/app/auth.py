@@ -20,13 +20,13 @@ def authenticate(username, password, code=None, verification_type="sms", mask_ke
     adapter = importlib.import_module(settings.local_auth_module)
     identity = call_adapter_login(adapter, username, password, code, verification_type, mask_key, mfa_key)
     identity = unwrap_login_result(identity)
-    if isinstance(identity, dict) and "mfakey" in identity:
-        key = identity["mfakey"]
+    if isinstance(identity, dict) and "mfa_key" in identity:
+        key = identity["mfa_key"]
         if not isinstance(key, str) or not key.strip() or len(key) > 4096:
             raise ValueError("Invalid MFA challenge")
-        response = {"mfa_required": True, "mfakey": key}
+        response = {"mfa_required": True, "mfa_key": key}
         if "mask_key" in identity:
-            response.update(mask_key=identity["mask_key"], mfa_key=identity["mfa_key"])
+            response["mask_key"] = identity["mask_key"]
         return response
     identity = validate_identity(identity)
     return {"username": identity["username"], "_session_cookies": identity["cookies"]}

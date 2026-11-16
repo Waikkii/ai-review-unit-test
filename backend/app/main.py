@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app):
     settings.validate_runtime()
+    logging.basicConfig(level=logging.INFO)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     # 初始化由 python -m app.init_db 显式执行，API 不自动改数据库。
     yield

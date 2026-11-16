@@ -772,7 +772,7 @@ function App() {
           onSubmit={(e) => {
             e.preventDefault();
             void act(async () => {
-              const res = await api<{ mfa_required: true; mfakey: string; mask_key?: string; mfa_key?: string } | {
+              const res = await api<{ mfa_required: true; mask_key?: string; mfa_key: string } | {
                 access_token: string;
                 user: User;
                 mode: string;
@@ -783,7 +783,7 @@ function App() {
                   ...(maskKey ? { mask_key: maskKey, mfa_key: mfakey } : {}) }),
               });
               if ("mfa_required" in res) {
-                setMfakey(res.mfa_key ?? res.mfakey);
+                setMfakey(res.mfa_key);
                 setMaskKey(res.mask_key ?? "");
                 setVerifyCode("");
                 return;

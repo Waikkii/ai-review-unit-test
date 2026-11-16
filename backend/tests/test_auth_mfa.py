@@ -41,7 +41,7 @@ def test_mfa_does_not_authenticate_until_code_is_verified(client, mfa_adapter, v
     credentials = {"username": "entered-account", "password": "private-password", "verification_type": verification_type}
     response = client.post("/api/auth/login", json=credentials)
     assert response.status_code == 200
-    assert response.json() == {"mfa_required": True, "mfakey": "challenge-for-current-login",
+    assert response.json() == {"mfa_required": True,
                                "mask_key": "mask-for-current-login", "mfa_key": "challenge-for-current-login"}
     with Session() as db:
         assert db.scalar(select(User)) is None

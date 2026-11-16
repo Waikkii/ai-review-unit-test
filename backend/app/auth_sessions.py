@@ -41,8 +41,8 @@ def unwrap_login_result(response):
                 if any(not isinstance(response.get(key), str) or not response[key].strip()
                        or len(response[key]) > 4096 for key in ("mask_key", "mfa_key")):
                     raise ValueError("Invalid MFA context")
-                return {"mfakey": response["mfa_key"], "mask_key": response["mask_key"], "mfa_key": response["mfa_key"]}
-            return {"mfakey": response.get("mfakey")}
+                return {"mask_key": response["mask_key"], "mfa_key": response["mfa_key"]}
+            return {"mfa_key": response.get("mfakey")}
         if response["result"] != "success" or not isinstance(response.get("info"), dict):
             raise ValueError("Invalid authentication result")
         return response["info"]
