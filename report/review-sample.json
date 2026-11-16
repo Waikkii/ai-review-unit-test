@@ -1,0 +1,171 @@
+{
+  "title": "单元测试报告审查分析",
+  "data_type": "模拟数据",
+  "scope": {
+    "total": 10000,
+    "supported": 9000,
+    "valid": 8000,
+    "classified": 7000,
+    "unclassified": 1000,
+    "excluded": [
+      {
+        "stage": "全部至支持",
+        "reasons": [
+          "主观类"
+        ],
+        "count": 1000
+      },
+      {
+        "stage": "支持至有效",
+        "reasons": [
+          "缺少附件",
+          "附件类型不支持"
+        ],
+        "count": 1000,
+        "reason_breakdown": null
+      }
+    ]
+  },
+  "results": [
+    {
+      "category": "通过",
+      "count": 5000,
+      "share_of_valid": 62.5,
+      "children": [
+        {
+          "category": "完全通过",
+          "count": 3000,
+          "share_of_parent": 60.0,
+          "share_of_valid": 37.5
+        },
+        {
+          "category": "通过，小数位数不一致",
+          "count": 2000,
+          "share_of_parent": 40.0,
+          "share_of_valid": 25.0
+        }
+      ]
+    },
+    {
+      "category": "未通过",
+      "count": 1000,
+      "share_of_valid": 12.5,
+      "children": [
+        {
+          "category": "数据填写错误",
+          "count": 1000,
+          "share_of_parent": 100.0,
+          "share_of_valid": 12.5
+        }
+      ]
+    },
+    {
+      "category": "规范待优化",
+      "count": 500,
+      "share_of_valid": 6.25,
+      "children": [
+        {
+          "category": "推动样例拆分",
+          "count": 100,
+          "share_of_parent": 20.0,
+          "share_of_valid": 1.25
+        },
+        {
+          "category": "使用万用表",
+          "count": 100,
+          "share_of_parent": 20.0,
+          "share_of_valid": 1.25
+        },
+        {
+          "category": "多指标判断",
+          "count": 100,
+          "share_of_parent": 20.0,
+          "share_of_valid": 1.25
+        },
+        {
+          "category": "数据标注规范",
+          "count": 200,
+          "share_of_parent": 40.0,
+          "share_of_valid": 2.5
+        }
+      ]
+    },
+    {
+      "category": "配置待完善",
+      "count": 300,
+      "share_of_valid": 3.75,
+      "children": [
+        {
+          "category": "关键词错误",
+          "count": 200,
+          "share_of_parent": 66.6667,
+          "share_of_valid": 2.5
+        },
+        {
+          "category": "缺少关键词",
+          "count": 100,
+          "share_of_parent": 33.3333,
+          "share_of_valid": 1.25
+        }
+      ]
+    },
+    {
+      "category": "AI 工具待优化",
+      "count": 200,
+      "share_of_valid": 2.5,
+      "children": [
+        {
+          "category": "AI 判断错误",
+          "count": 100,
+          "share_of_parent": 50.0,
+          "share_of_valid": 1.25
+        },
+        {
+          "category": "AI 没有读出数据",
+          "count": 100,
+          "share_of_parent": 50.0,
+          "share_of_valid": 1.25
+        }
+      ]
+    }
+  ],
+  "reconciliation": {
+    "category": "未提供分类",
+    "count": 1000,
+    "share_of_valid": 12.5
+  },
+  "metrics": {
+    "supported_share_of_total": {
+      "numerator": 9000,
+      "denominator": 10000,
+      "percent": 90.0
+    },
+    "eligible_coverage_of_total": {
+      "numerator": 8000,
+      "denominator": 10000,
+      "percent": 80.0
+    },
+    "eligible_coverage_of_supported": {
+      "numerator": 8000,
+      "denominator": 9000,
+      "percent": 88.8889
+    },
+    "classification_completeness": {
+      "numerator": 7000,
+      "denominator": 8000,
+      "percent": 87.5
+    },
+    "actual_ai_coverage_of_total": {
+      "numerator": null,
+      "denominator": 10000,
+      "percent": null,
+      "reason": "缺少实际进入 AI 审查的去重项数"
+    },
+    "ai_accuracy": {
+      "numerator": null,
+      "denominator": null,
+      "percent": null,
+      "reason": "缺少人工复核确认的正确项数与有效复核总数"
+    }
+  }
+}
