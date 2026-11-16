@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import "./style.css";
 
 type User = { id: string; username: string; role: string; active: boolean };
+const roleLabel = (role: string) => role === "admin" ? "管理员" : role === "user" ? "普通用户" : "无权限用户";
 type PageData<T> = { items: T[]; total: number };
 type TableData<T> = PageData<T> & { options: Record<string, string[]> };
 type Report = {
@@ -142,6 +143,8 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "请求失败" }));
     if (res.status === 401 && token) window.dispatchEvent(new Event("session-expired"));
+    if (res.status === 403 && body.detail === "当前账号无权限，请联系管理员授权")
+      window.dispatchEvent(new Event("permission-revoked"));
     throw new Error(
       typeof body.detail === "string"
         ? body.detail
@@ -157,6 +160,8 @@ async function download(path: string, name: string) {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     if (res.status === 401) window.dispatchEvent(new Event("session-expired"));
+    if (res.status === 403 && body?.detail === "当前账号无权限，请联系管理员授权")
+      window.dispatchEvent(new Event("permission-revoked"));
     throw new Error(typeof body?.detail === "string" ? body.detail
       : body?.detail ? JSON.stringify(body.detail) : `下载失败（HTTP ${res.status}），请联系管理员查看 API 日志`);
   }
@@ -347,6 +352,7 @@ const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable,
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
+  const authorized = user?.role === "user" || user?.role === "admin";
   const [name, setName] = useState(""),
     [password, setPassword] = useState("");
   const [mfakey, setMfakey] = useState("");
@@ -456,6 +462,23 @@ function App() {
     window.addEventListener("session-expired", expire);
     return () => window.removeEventListener("session-expired", expire);
   }, []);
+  useEffect(() => {
+    const revoke = () => {
+      runViewVersion.current += 1;
+      setUser(previous => previous && previous.role !== "none" ? { ...previous, role: "none" } : previous);
+      setSelected(null);
+      setRun(null);
+      setReports([]);
+      setItems([]);
+      setResults([]);
+      setKeywords([]);
+      setPermission(null);
+      setDecision(null);
+      setAuthAlert("");
+    };
+    window.addEventListener("permission-revoked", revoke);
+    return () => window.removeEventListener("permission-revoked", revoke);
+  }, []);
   const loadReports = useCallback(async () => {
     setReports(
       await api<Report[]>(
@@ -464,11 +487,11 @@ function App() {
     );
   }, [reportPage]);
   useEffect(() => {
-    if (user && tab === "reports")
+    if (authorized && tab === "reports")
       loadReports().catch((e) => setError(e.message));
   }, [user, tab, loadReports]);
   useEffect(() => {
-    if (!user) return;
+    if (!user || !authorized) return;
     const load = async () => {
       if (tab === "reports") setKeywords(await api<Keyword[]>("/keywords"));
       if (tab === "keywords") {
@@ -493,7 +516,7 @@ function App() {
     load().catch((e) => setError(e.message));
   }, [user, tab, changePage, auditPage]);
   useEffect(() => {
-    if (!selected || tab !== "reports" || run) return;
+    if (!authorized || !selected || tab !== "reports" || run) return;
     let cancelled = false;
     // Background refreshes must keep the existing rows mounted and preserve scroll.
     const query = json([selected.id, itemPage, pageSize, tableFilters]);
@@ -520,12 +543,12 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, itemPage, pageSize, tableFilters, tab, run?.id, reviewRefresh]);
+  }, [selected, itemPage, pageSize, tableFilters, tab, run?.id, reviewRefresh, authorized]);
   useEffect(() => {
     if (run?.state === "blocked" && run.error_code === "auth_session_failed") setAuthAlert(run.error_message);
   }, [run?.id, run?.state, run?.error_code, run?.error_message]);
   useEffect(() => {
-    if (!selected) return;
+    if (!authorized || !selected) return;
     let cancelled = false;
     const loadRuns = async () => {
       const all: Run[] = [];
@@ -545,9 +568,9 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [selected, run?.id, run?.state]);
+  }, [selected, run?.id, run?.state, authorized]);
   useEffect(() => {
-    if (!run || tab !== "reports") return;
+    if (!authorized || !run || tab !== "reports") return;
     const viewVersion = runViewVersion.current;
     let cancelled = false;
     let timer: number | undefined;
@@ -583,7 +606,7 @@ function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [run?.id, run?.state, resultPage, pageSize, tableFilters, tab, reviewRefresh]);
+  }, [run?.id, run?.state, resultPage, pageSize, tableFilters, tab, reviewRefresh, authorized]);
   const pager = (page: number, setPage: (n: number) => void, count: number) => (
     <div className="pager">
       <button disabled={page === 0} onClick={() => setPage(page - 1)}>
@@ -762,6 +785,24 @@ function App() {
     </table>
     {!tableRows.length && <p className="empty">{run ? "当前筛选暂无结果。" : "暂无测试项。"}</p>}
   </div>;
+  const logout = async () => {
+    await api("/auth/logout", { method: "POST" });
+    token = "";
+    runViewVersion.current += 1;
+    setUser(null);
+    setSelected(null);
+    setRun(null);
+    setReports([]);
+    setItems([]);
+    setResults([]);
+    setKeywords([]);
+    setChanges([]);
+    setUsers([]);
+    setAudit([]);
+    setAuthAlert("");
+    setPermission(null);
+    setDecision(null);
+  };
   if (!user)
     return (
       <main className="login">
@@ -857,6 +898,23 @@ function App() {
         )}
       </main>
     );
+  if (!authorized) return <main className="login">
+    <div className="mark">审</div>
+    <h1>无权限用户</h1>
+    <p>当前账号：{user.username}</p>
+    <p>当前账号尚未获得系统使用权限，请联系管理员授权。</p>
+    <div className="actions">
+      <button className="primary" disabled={busy} onClick={() => void act(async () => {
+        const refreshed = await api<User>("/auth/me");
+        setUser(refreshed);
+        setTab("reports");
+        if (refreshed.role === "none") setNotice("当前仍无使用权限，请联系管理员授权");
+      })}>刷新权限</button>
+      <button disabled={busy} onClick={() => void act(logout)}>退出登录</button>
+    </div>
+    {notice && <p role="status">{notice}</p>}
+    {error && <p role="alert" className="error">{error}</p>}
+  </main>;
   return (
     <div className="layout" inert={uploading} aria-busy={uploading}>
       <aside>
@@ -887,26 +945,9 @@ function App() {
         </nav>
         <div className="account">
           <b>{user.username}</b>
-          <p>{user.role === "admin" ? "管理员" : "普通用户"}</p>
+          <p>{roleLabel(user.role)}</p>
           <button
-            onClick={() => void act(async () => {
-              await api("/auth/logout", { method: "POST" });
-              token = "";
-              runViewVersion.current += 1;
-              setUser(null);
-              setSelected(null);
-              setRun(null);
-              setReports([]);
-              setItems([]);
-              setResults([]);
-              setKeywords([]);
-              setChanges([]);
-              setUsers([]);
-              setAudit([]);
-              setAuthAlert("");
-              setPermission(null);
-              setDecision(null);
-            })}
+            onClick={() => void act(logout)}
           >
             退出登录
           </button>
@@ -1249,7 +1290,7 @@ function App() {
           <section className="card">
             <h2>内网账号与系统权限</h2>
             <p className="muted">
-              账号通过内网鉴权首次登录后登记；本系统管理角色与启用状态。
+              新账号首次登录默认为无权限用户，经管理员授权后才能使用系统。
             </p>
             <table>
               <thead>
@@ -1264,7 +1305,7 @@ function App() {
                 {users.map((u) => (
                   <tr key={u.id}>
                     <td>{u.username}</td>
-                    <td>{u.role === "admin" ? "管理员" : "普通用户"}</td>
+                    <td>{roleLabel(u.role)}</td>
                     <td>{u.active ? "启用" : "停用"}</td>
                     <td>
                       <button
@@ -1408,11 +1449,13 @@ function App() {
               <label>
                 角色
                 <select
+                  aria-label="角色"
                   value={permission.role}
                   onChange={(e) =>
                     setPermission({ ...permission, role: e.target.value })
                   }
                 >
+                  <option value="none">无权限用户</option>
                   <option value="user">普通用户</option>
                   <option value="admin">管理员</option>
                 </select>

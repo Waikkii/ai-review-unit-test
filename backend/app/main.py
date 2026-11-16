@@ -12,7 +12,7 @@ from .db import get_db, uid, now
 from .models import User, Report, Item, ItemSource, Run, Result, Keyword, ChangeRequest, Audit, ItemNote, ResultMeasurements, ItemReviewState, RunControl, ResultWork, SessionCredential, RunRetainedItem
 from .schemas import Login, SendVerifyCode, ItemEdit, NoteEdit, ReviewStateEdit, KeywordChange, KeywordEntryChange, Decision, UserChange, StartReview
 from .keywords import ENTRY_DOMAIN, LEGACY_ENTRY_DOMAIN, entry_key, matches_entry
-from .auth import authenticate, send_verify_code, issue_token, current_user, admin_user
+from .auth import authenticate, send_verify_code, issue_token, current_user, authenticated_user, admin_user
 from .excel import parse_excel, export_excel
 from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
@@ -77,7 +77,7 @@ def login(data: Login, db=Depends(get_db)):
     user = db.scalar(select(User).where(User.username == name))
     if user is None:
         admins = {x.strip() for x in settings.bootstrap_admins.split(",") if x.strip()}
-        role = "admin" if name in admins or (settings.app_mode == "demo" and name == "admin") else "user"
+        role = "admin" if name in admins or (settings.app_mode == "demo" and name == "admin") else "none"
         user = User(username=name, role=role)
         db.add(user)
         db.flush()
@@ -99,12 +99,12 @@ def request_verify_code(data: SendVerifyCode):
     return {"ok": True}
 
 @app.get("/api/auth/me")
-def me(user=Depends(current_user)):
+def me(user=Depends(authenticated_user)):
     return serial(user, "id username role active")
 
 
 @app.post("/api/auth/logout")
-def logout(user=Depends(current_user), db=Depends(get_db)):
+def logout(user=Depends(authenticated_user), db=Depends(get_db)):
     db.execute(delete(SessionCredential).where(SessionCredential.username == user.username))
     db.commit()
     return {"ok": True}

@@ -43,7 +43,7 @@ def issue_token(user):
                        "iat": now(), "iss": "unit-test-review", "aud": "review-ui"},
                       settings.secret_key, algorithm="HS256")
 
-def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db=Depends(get_db)):
+def authenticated_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db=Depends(get_db)):
     try:
         if credentials is None:
             raise ValueError()
@@ -55,6 +55,11 @@ def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bear
         return user
     except (jwt.PyJWTError, ValueError, KeyError):
         raise HTTPException(401, "登录已失效，请重新登录")
+
+def current_user(user=Depends(authenticated_user)):
+    if user.role not in {"user", "admin"}:
+        raise HTTPException(403, "当前账号无权限，请联系管理员授权")
+    return user
 
 def admin_user(user=Depends(current_user)):
     if user.role != "admin":

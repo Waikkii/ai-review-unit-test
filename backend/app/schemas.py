@@ -100,7 +100,7 @@ class Decision(StrictModel):
     note: str = Field(min_length=1, max_length=2000)
 
 class UserChange(StrictModel):
-    role: Literal["user", "admin"]
+    role: Literal["none", "user", "admin"]
     active: bool
     reason: str = Field(min_length=1, max_length=2000)
 

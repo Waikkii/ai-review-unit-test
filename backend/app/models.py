@@ -6,7 +6,7 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     username: Mapped[str] = mapped_column(String(128), unique=True)
-    role: Mapped[str] = mapped_column(String(16), default="user")
+    role: Mapped[str] = mapped_column(String(16), default="none")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[object] = mapped_column(DateTime, default=now)
 
