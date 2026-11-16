@@ -66,14 +66,8 @@ def test_mfa_does_not_authenticate_until_code_is_verified(client, mfa_adapter, v
 
 
 @pytest.mark.parametrize("kind", ["sms", "email"])
-@pytest.mark.parametrize("result", ["success", "succes"])
-def test_sends_code_without_login_token(client, mfa_adapter, kind, result):
-    module, calls = mfa_adapter
-    original = module.send_verify_code
-    def send(*args):
-        original(*args)
-        return result
-    module.send_verify_code = send
+def test_sends_code_without_login_token(client, mfa_adapter, kind):
+    _, calls = mfa_adapter
     response = client.post("/api/auth/send-verify-code", json={"mfakey": "challenge", "type": kind})
     assert response.status_code == 200 and response.json() == {"ok": True}
     assert calls["send"] == [("challenge", kind)]

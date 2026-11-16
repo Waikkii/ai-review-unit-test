@@ -35,7 +35,7 @@ def send_verify_code(mfakey, verification_type):
     if settings.app_mode == "demo":
         raise ValueError("MFA unavailable in demo mode")
     result = importlib.import_module(settings.local_auth_module).send_verify_code(mfakey, verification_type)
-    if result not in ("success", "succes"):
+    if result != "success":
         raise ValueError("Verification code delivery failed")
 
 def issue_token(user):

@@ -29,11 +29,11 @@ def login(username: str, password: str, code: str | None = None,
 
 def send_verify_code(mfakey: str, verification_type: str):
     # verification_type 为 "sms" 或 "email"。
-    # 根据 mfakey 发送验证码；成功返回 "success"（兼容 "succes"），失败返回 "fail"。
+    # 根据 mfakey 发送验证码；成功返回 "success"，失败返回 "fail"。
     ...
 ```
 
-`POST /api/auth/login` 请求 `{username, password, code?, verification_type: "sms" | "email", mask_key?, mfa_key?}`。前端始终传验证方式，默认手机 sms；后端按位置调用六参数 login，首次请求的 code、mask_key、mfa_key 均为 None。收到 verify 后将两个 key 返回前端，前端只在当前页面内存缓存，并在再次登录时原样提交；失败时保留以便重试，新 verify 响应会替换旧值。登录成功、修改账号密码、会话失效或刷新页面时清除，不写入浏览器持久存储，也不保存到后端会话数据库。两字段必须为非空字符串且各不超过 4096 字符。无 mask_key/mfa_key 的旧流程兼容旧版两参数、三参数、四参数适配器时按函数签名调用，不会在登录逻辑内部报 TypeError 后重试。返回 `{mfa_required: true, mask_key, mfa_key, mfakey: mfa_key}` 时不创建账号、不签发令牌、不保存登录凭据。前端仅在当前页面内存保留输入的用户名、密码及两个 key，并显示验证码输入框、发送按钮和手机/邮箱切换，默认选择手机。`POST /api/auth/send-verify-code` 请求 `{mfakey, type: "sms" | "email"}`，前端以 mfa_key 作为发送请求的 mfakey，后端调用上述发送函数（发送与登录接口统一使用 sms/email）；请求发送期间按钮不可用；返回 success 或 succes 后显示“发送成功”并开始 60 秒倒计时，期间按钮不可用，切换接收方式不会重置倒计时。返回 fail、异常或其他非成功结果时显示“发送失败，请联系管理员解决”，不启动倒计时，按钮恢复可用。倒计时是页面按钮控制，适配器应按实际认证系统约定处理凭据有效期、发送限制及验证失败。
+`POST /api/auth/login` 请求 `{username, password, code?, verification_type: "sms" | "email", mask_key?, mfa_key?}`。前端始终传验证方式，默认手机 sms；后端按位置调用六参数 login，首次请求的 code、mask_key、mfa_key 均为 None。收到 verify 后将两个 key 返回前端，前端只在当前页面内存缓存，并在再次登录时原样提交；失败时保留以便重试，新 verify 响应会替换旧值。登录成功、修改账号密码、会话失效或刷新页面时清除，不写入浏览器持久存储，也不保存到后端会话数据库。两字段必须为非空字符串且各不超过 4096 字符。无 mask_key/mfa_key 的旧流程兼容旧版两参数、三参数、四参数适配器时按函数签名调用，不会在登录逻辑内部报 TypeError 后重试。返回 `{mfa_required: true, mask_key, mfa_key, mfakey: mfa_key}` 时不创建账号、不签发令牌、不保存登录凭据。前端仅在当前页面内存保留输入的用户名、密码及两个 key，并显示验证码输入框、发送按钮和手机/邮箱切换，默认选择手机。`POST /api/auth/send-verify-code` 请求 `{mfakey, type: "sms" | "email"}`，前端以 mfa_key 作为发送请求的 mfakey，后端调用上述发送函数（发送与登录接口统一使用 sms/email）；请求发送期间按钮不可用；返回 success 后显示“发送成功”并开始 60 秒倒计时，期间按钮不可用，切换接收方式不会重置倒计时。返回 fail、异常或其他非成功结果时显示“发送失败，请联系管理员解决”，不启动倒计时，按钮恢复可用。倒计时是页面按钮控制，适配器应按实际认证系统约定处理凭据有效期、发送限制及验证失败。
 
 适配器明确返回 `result="fail"` 时，API 以 401 返回 `detail=reason`，登录页按文本显示 reason（例如“验证码错误，请重试”“用户名密码错误”），保留当前表单与验证码界面，不签发令牌或保存会话。reason 应为非空字符串，最多 2000 字；异常及非法返回仍使用统一错误提示。成功时只读取 info 内的 username、cookies，Cookie 不返回浏览器。兼容旧版直接返回 `{username, cookies}`。后台自动重登同样支持新成功格式；失败原因不会直接暴露到审查页面，仍按现有认证失败流程阻塞批次。
 
