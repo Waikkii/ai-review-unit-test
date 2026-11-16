@@ -2,7 +2,7 @@
 
 登录和审查统一由被 Git 忽略的 backend/local_adapters 目录提供。
 
-- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password, code=None) 成功返回 {result: "success", info: {username, cookies}}，失败返回 {result: "fail", reason: "页面提示"}，需要验证码时返回 {result: "verify", mfakey}；fetchimage(url, cookies) 返回 [(base64_string, MIME), ...]。
+- LOCAL_AUTH_MODULE=local_adapters.login_adapter：login(username, password, code=None, verification_type="sms", mask_key=None, mfa_key=None) 成功返回 {result: "success", info: {username, cookies}}，失败返回 {result: "fail", reason: "页面提示"}，需要验证码时返回 {result: "verify", mask_key, mfa_key}；fetchimage(url, cookies) 返回 [(base64_string, MIME), ...]。
 - LOCAL_REVIEW_MODULE=local_adapters.review_rules：review_item(unit, keyword, attachment_url, criterion, threshold, value, fetchimage) 返回 (ai_threshold, ai_value, result) 三个字符串，并提供 RULE_VERSION。兼容旧版 (verdict, raw) 返回格式。
 - attachment_url 是当前行附件入口的 str；一个入口可返回多张图片。回调类型为 Callable[[str], list[tuple[str, str]]]。
 - 自动判定优先级：无附件链接直接返回“缺少附件”；否则判据门限含中文汉字时返回“主观类”。两种情况均直接已审查，不调用本地模型/图片函数。其余测试项再按五字段匹配关键词，无关键词返回“缺少关键词”并保留待审查资格。
@@ -17,26 +17,29 @@
 无需验证时登录流程保持不变。需要验证时，私有适配器采用以下契约：
 
 ```python
-def login(username: str, password: str, code: str | None = None) -> dict:
-    # 无 code 时正常登录；触发风控则返回 {"result": "verify", "mfakey": "本次验证凭据"}。
+def login(username: str, password: str, code: str | None = None,
+          verification_type: str = "sms", mask_key: str | None = None,
+          mfa_key: str | None = None) -> dict:
+    # 无 code 时正常登录；触发风控则返回 {"result": "verify", "mask_key": "本次mask", "mfa_key": "本次验证凭据"}。
+    # verification_type 为 "sms"（手机）或 "email"（邮箱）。
     # 有 code 时，由本地逻辑验证并登录。
     # 成功：{"result": "success", "info": {"username": "稳定账号", "cookies": {...}}}
     # 失败：{"result": "fail", "reason": "验证码错误，请重试"} 或其他明确的提示文字。
     ...
 
 def send_verify_code(mfakey: str, verification_type: str):
-    # verification_type 为 "phone" 或 "email"。
-    # 根据 mfakey 发送验证码；成功可返回 None，失败请抛出异常或返回 False。
+    # verification_type 为 "sms" 或 "email"。
+    # 根据 mfakey 发送验证码；成功返回 "success"（兼容 "succes"），失败返回 "fail"。
     ...
 ```
 
-`POST /api/auth/login` 请求 `{username, password, code?}`。无验证码时仍只用两个参数调用旧适配器；有验证码时以 `code=...` 传入。返回 `{mfa_required: true, mfakey}` 时不创建账号、不签发令牌、不保存登录凭据。前端仅在当前页面内存保留输入的用户名、密码及 mfakey，并显示验证码输入框、发送按钮和手机/邮箱切换，默认选择手机。`POST /api/auth/send-verify-code` 请求 `{mfakey, type: "phone" | "email"}`，后端调用上述发送函数；点击后按钮倒计时 60 秒，发送失败或切换接收方式不会重置倒计时。倒计时是页面按钮控制，适配器应按实际认证系统约定处理凭据有效期、发送限制及验证失败。
+`POST /api/auth/login` 请求 `{username, password, code?, verification_type: "sms" | "email", mask_key?, mfa_key?}`。前端始终传验证方式，默认手机 sms；后端按位置调用六参数 login，首次请求的 code、mask_key、mfa_key 均为 None。收到 verify 后将两个 key 返回前端，前端只在当前页面内存缓存，并在再次登录时原样提交；失败时保留以便重试，新 verify 响应会替换旧值。登录成功、修改账号密码、会话失效或刷新页面时清除，不写入浏览器持久存储，也不保存到后端会话数据库。两字段必须为非空字符串且各不超过 4096 字符。无 mask_key/mfa_key 的旧流程兼容旧版两参数、三参数、四参数适配器时按函数签名调用，不会在登录逻辑内部报 TypeError 后重试。返回 `{mfa_required: true, mask_key, mfa_key, mfakey: mfa_key}` 时不创建账号、不签发令牌、不保存登录凭据。前端仅在当前页面内存保留输入的用户名、密码及两个 key，并显示验证码输入框、发送按钮和手机/邮箱切换，默认选择手机。`POST /api/auth/send-verify-code` 请求 `{mfakey, type: "sms" | "email"}`，前端以 mfa_key 作为发送请求的 mfakey，后端调用上述发送函数（发送与登录接口统一使用 sms/email）；请求发送期间按钮不可用；返回 success 或 succes 后显示“发送成功”并开始 60 秒倒计时，期间按钮不可用，切换接收方式不会重置倒计时。返回 fail、异常或其他非成功结果时显示“发送失败，请联系管理员解决”，不启动倒计时，按钮恢复可用。倒计时是页面按钮控制，适配器应按实际认证系统约定处理凭据有效期、发送限制及验证失败。
 
 适配器明确返回 `result="fail"` 时，API 以 401 返回 `detail=reason`，登录页按文本显示 reason（例如“验证码错误，请重试”“用户名密码错误”），保留当前表单与验证码界面，不签发令牌或保存会话。reason 应为非空字符串，最多 2000 字；异常及非法返回仍使用统一错误提示。成功时只读取 info 内的 username、cookies，Cookie 不返回浏览器。兼容旧版直接返回 `{username, cookies}`。后台自动重登同样支持新成功格式；失败原因不会直接暴露到审查页面，仍按现有认证失败流程阻塞批次。
 
-再次登录只额外传 code，不自动传 mfakey 给 login；若验证需要关联 mfakey，由私有适配器自行按账号维护验证上下文，避免不同用户互相覆盖。验证失败保留表单；成功后清空页面密码、验证码及 mfakey，仅后端加密保存账号密码和 Cookie，不保存验证码。修改账号或密码会取消当前验证界面，重新执行登录。已有适配器无须修改即可继续普通双参数登录；启用验证码时需自行更新私有适配器，本仓库不会覆盖真实接入代码。
+再次登录传入 code、verification_type、mask_key、mfa_key，适配器直接使用本次请求的验证上下文，不需要用全局变量缓存不同用户的 key。旧版 `{result: "verify", mfakey}` 返回仍兼容原单 key 流程。验证失败保留表单；成功后清空页面密码、验证码及两个 key，仅后端加密保存账号密码、Cookie 和所选验证方式，不保存验证码。修改账号或密码会取消当前验证界面，重新执行登录。已有适配器无须修改即可继续普通双参数登录；启用验证码时需自行更新私有适配器，本仓库不会覆盖真实接入代码。
 
-后台 Cookie 自动刷新仍只调用双参数 login；若此时返回 `{result: "verify", mfakey}`，批次按原认证失败流程阻塞，需用户重新登录并完成验证码后再继续，不会在 Worker 自动发送验证码。
+后台 Cookie 自动刷新调用六参数 login，code、mask_key、mfa_key 均为 None，验证方式沿用上次成功登录时的选择；旧会话缺少该字段时默认 sms，旧版适配器仍按其签名调用；若此时返回 `result="verify"`，批次按原认证失败流程阻塞，需用户重新登录并完成验证码后再继续，不会在 Worker 自动发送验证码。
 
 SQLite 源关键词表使用 A/B/C/D/E 联合主键，E 是指标名称，I 是单个关键词。
 POST /api/keyword-entry-requests 使用 {action, entry:{a,b,c,d,e,i}, base_version, reason, result_id?}。

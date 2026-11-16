@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import importlib
+import inspect
 import json
 from datetime import timedelta
 from cryptography.fernet import Fernet, InvalidToken
@@ -37,6 +38,11 @@ def unwrap_login_result(response):
                 raise ValueError("Invalid authentication failure reason")
             raise AuthenticationRejected(reason)
         if response["result"] == "verify":
+            if "mask_key" in response or "mfa_key" in response:
+                if any(not isinstance(response.get(key), str) or not response[key].strip()
+                       or len(response[key]) > 4096 for key in ("mask_key", "mfa_key")):
+                    raise ValueError("Invalid MFA context")
+                return {"mfakey": response["mfa_key"], "mask_key": response["mask_key"], "mfa_key": response["mfa_key"]}
             return {"mfakey": response.get("mfakey")}
         if response["result"] != "success" or not isinstance(response.get("info"), dict):
             raise ValueError("Invalid authentication result")
@@ -61,8 +67,26 @@ def validate_identity(identity):
     return identity
 
 
-def store_credentials(db, username, login_username, password, cookies):
+def call_adapter_login(module, username, password, code=None, verification_type="sms", mask_key=None, mfa_key=None):
+    # 根据函数签名兼容旧适配器，不因业务内部 TypeError 重复执行登录请求。
+    signature = inspect.signature(module.login)
+    args = (username, password, code, verification_type, mask_key, mfa_key)
+    try:
+        signature.bind(*args)
+    except TypeError:
+        if mask_key is not None or mfa_key is not None:
+            raise
+        try:
+            signature.bind(*args[:4])
+        except TypeError:
+            return module.login(username, password) if code is None else module.login(username, password, code=code)
+        return module.login(*args[:4])
+    return module.login(*args)
+
+
+def store_credentials(db, username, login_username, password, cookies, verification_type="sms"):
     payload = {"login_username": login_username, "password": password, "cookies": cookies}
+    payload["verification_type"] = verification_type
     encrypted = _cipher().encrypt(json.dumps(payload).encode()).decode()
     db.execute(delete(SessionCredential).where(
         SessionCredential.updated_at < now() - timedelta(seconds=settings.credential_ttl_seconds)))
@@ -117,7 +141,9 @@ def download_with_session(url: str, username: str) -> list[tuple[str, str]]:
             if record.version != version or current != payload:
                 payload = current
             else:
-                identity = validate_identity(module.login(payload["login_username"], payload["password"]))
+                identity = validate_identity(call_adapter_login(
+                    module, payload["login_username"], payload["password"],
+                    verification_type=payload.get("verification_type", "sms")))
                 if identity["username"] != username:
                     raise SessionAuthFailure()
                 payload["cookies"] = identity["cookies"]

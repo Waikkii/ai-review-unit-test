@@ -15,16 +15,18 @@ def mfa_adapter(client, monkeypatch):
     module = types.ModuleType("test_mfa_adapter")
     calls = {"login": [], "send": []}
 
-    def login(username, password, code=None):
-        calls["login"].append((username, password, code))
+    def login(username, password, code, verification_type, mask_key, mfa_key):
+        calls["login"].append((username, password, code, verification_type, mask_key, mfa_key))
         if code is None:
-            return {"result": "verify", "mfakey": "challenge-for-current-login"}
+            return {"result": "verify", "mask_key": "mask-for-current-login", "mfa_key": "challenge-for-current-login"}
+        assert (mask_key, mfa_key) == ('mask-for-current-login', 'challenge-for-current-login')
         if code != "012345":
             return {"result": "fail", "reason": "验证码错误，请重试"}
         return {"result": "success", "info": {"username": "verified-account", "cookies": {"session": "private-cookie"}}}
 
     def send(key, kind):
         calls["send"].append((key, kind))
+        return "success"
 
     module.login, module.send_verify_code = login, send
     monkeypatch.setitem(sys.modules, module.__name__, module)
@@ -33,16 +35,19 @@ def mfa_adapter(client, monkeypatch):
     return module, calls
 
 
-def test_mfa_does_not_authenticate_until_code_is_verified(client, mfa_adapter):
+@pytest.mark.parametrize('verification_type', ['sms', 'email'])
+def test_mfa_does_not_authenticate_until_code_is_verified(client, mfa_adapter, verification_type):
     module, calls = mfa_adapter
-    credentials = {"username": "entered-account", "password": "private-password"}
+    credentials = {"username": "entered-account", "password": "private-password", "verification_type": verification_type}
     response = client.post("/api/auth/login", json=credentials)
     assert response.status_code == 200
-    assert response.json() == {"mfa_required": True, "mfakey": "challenge-for-current-login"}
+    assert response.json() == {"mfa_required": True, "mfakey": "challenge-for-current-login",
+                               "mask_key": "mask-for-current-login", "mfa_key": "challenge-for-current-login"}
     with Session() as db:
         assert db.scalar(select(User)) is None
         assert db.scalar(select(SessionCredential)) is None
     assert client.get("/api/auth/me").status_code == 401
+    credentials.update(mask_key=response.json()['mask_key'], mfa_key=response.json()['mfa_key'])
     failure = client.post("/api/auth/login", json={**credentials, "code": "wrong"})
     assert failure.status_code == 401 and "private" not in failure.text
     assert failure.json() == {"detail": "验证码错误，请重试"}
@@ -51,24 +56,30 @@ def test_mfa_does_not_authenticate_until_code_is_verified(client, mfa_adapter):
     assert success.json()["user"]["username"] == "verified-account"
     assert "private" not in success.text and "mfakey" not in success.text
     assert client.get("/api/auth/me", headers={"Authorization": "Bearer " + success.json()["access_token"]}).status_code == 200
-    assert calls["login"] == [("entered-account", "private-password", None),
-                              ("entered-account", "private-password", "wrong"),
-                              ("entered-account", "private-password", "012345")]
+    assert calls["login"] == [("entered-account", "private-password", None, verification_type, None, None),
+                              ("entered-account", "private-password", "wrong", verification_type, 'mask-for-current-login', 'challenge-for-current-login'),
+                              ("entered-account", "private-password", "012345", verification_type, 'mask-for-current-login', 'challenge-for-current-login')]
     with Session() as db:
         payload = _decode(db.get(SessionCredential, "verified-account").encrypted)
         assert payload == {"login_username": "entered-account", "password": "private-password",
-                           "cookies": {"session": "private-cookie"}}
+                           "cookies": {"session": "private-cookie"}, "verification_type": verification_type}
 
 
-@pytest.mark.parametrize("kind", ["phone", "email"])
-def test_sends_code_without_login_token(client, mfa_adapter, kind):
-    _, calls = mfa_adapter
+@pytest.mark.parametrize("kind", ["sms", "email"])
+@pytest.mark.parametrize("result", ["success", "succes"])
+def test_sends_code_without_login_token(client, mfa_adapter, kind, result):
+    module, calls = mfa_adapter
+    original = module.send_verify_code
+    def send(*args):
+        original(*args)
+        return result
+    module.send_verify_code = send
     response = client.post("/api/auth/send-verify-code", json={"mfakey": "challenge", "type": kind})
     assert response.status_code == 200 and response.json() == {"ok": True}
     assert calls["send"] == [("challenge", kind)]
 
 
-@pytest.mark.parametrize("data", [{"mfakey": "", "type": "phone"}, {"mfakey": "key", "type": "sms"}])
+@pytest.mark.parametrize("data", [{"mfakey": "", "type": "sms"}, {"mfakey": "key", "type": "phone"}])
 def test_rejects_invalid_delivery_requests(client, mfa_adapter, data):
     _, calls = mfa_adapter
     assert client.post("/api/auth/send-verify-code", json=data).status_code == 422
@@ -82,6 +93,16 @@ def test_delivery_errors_are_not_exposed(client, mfa_adapter):
     module.send_verify_code = fail
     response = client.post("/api/auth/send-verify-code", json={"mfakey": "challenge", "type": "email"})
     assert response.status_code == 400 and "private" not in response.text
+    assert response.json() == {"detail": "发送失败，请联系管理员解决"}
+
+
+@pytest.mark.parametrize('result', ['fail', None, False, 'unexpected'])
+def test_delivery_failure_results_do_not_report_success(client, mfa_adapter, result):
+    module, _ = mfa_adapter
+    module.send_verify_code = lambda *args: result
+    response = client.post('/api/auth/send-verify-code', json={"mfakey": "challenge", "type": "sms"})
+    assert response.status_code == 400
+    assert response.json() == {"detail": "发送失败，请联系管理员解决"}
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
@@ -113,6 +134,8 @@ def test_explicit_login_failure_displays_only_reason_and_creates_no_session(clie
     {"result": "fail", "reason": ""}, {"result": "unknown", "reason": "private-error"},
     {"result": "verify"}, {"result": "verify", "mfakey": ""},
     {"result": "verify", "mfakey": 123},
+    {"result": "verify", "mask_key": "mask"},
+    {"result": "verify", "mask_key": "mask", "mfa_key": ""},
 ])
 def test_invalid_adapter_results_use_generic_error(client, mfa_adapter, result):
     module, _ = mfa_adapter
@@ -150,3 +173,28 @@ def test_mfa_during_background_refresh_blocks_instead_of_authenticating(client, 
         download_with_session("https://intranet/image", "account")
     assert 'private' not in str(exc.value)
     assert len(calls["login"]) == 1 and not calls["send"]
+    assert calls['login'][0][2:] == (None, 'sms', None, None)
+
+
+def test_invalid_login_verification_type_is_rejected(client, mfa_adapter):
+    _, calls = mfa_adapter
+    response = client.post('/api/auth/login', json={"username": "account", "password": "password",
+                                                  "verification_type": "phone"})
+    assert response.status_code == 422 and not calls['login']
+
+
+def test_refresh_uses_saved_email_channel(client, mfa_adapter):
+    module, calls = mfa_adapter
+    with Session() as db:
+        store_credentials(db, 'account', 'account', 'password', {"session": "old"}, 'email')
+        db.commit()
+    def login(username, password, code, verification_type):
+        calls['login'].append((username, password, code, verification_type))
+        return {"result": "success", "info": {"username": username, "cookies": {"session": "new"}}}
+    def fetch(url, cookies):
+        if cookies['session'] == 'old':
+            raise CookieExpired()
+        return []
+    module.login, module.fetchimage = login, fetch
+    assert download_with_session('https://intranet/image', 'account') == []
+    assert calls['login'] == [('account', 'password', None, 'email')]

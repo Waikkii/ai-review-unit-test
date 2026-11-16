@@ -11,21 +11,23 @@ from .models import User
 
 bearer = HTTPBearer(auto_error=False)
 
-def authenticate(username, password, code=None):
+def authenticate(username, password, code=None, verification_type="sms", mask_key=None, mfa_key=None):
     if settings.app_mode == "demo":
         if username not in {"demo", "admin"} or not compare_digest(password, settings.demo_password):
             raise ValueError("invalid credentials")
         return {"username": username}
-    from .auth_sessions import validate_identity, unwrap_login_result
+    from .auth_sessions import validate_identity, unwrap_login_result, call_adapter_login
     adapter = importlib.import_module(settings.local_auth_module)
-    # 没有验证码时保留原来的双参数调用，兼容已有私有适配器。
-    identity = adapter.login(username, password) if code is None else adapter.login(username, password, code=code)
+    identity = call_adapter_login(adapter, username, password, code, verification_type, mask_key, mfa_key)
     identity = unwrap_login_result(identity)
     if isinstance(identity, dict) and "mfakey" in identity:
         key = identity["mfakey"]
         if not isinstance(key, str) or not key.strip() or len(key) > 4096:
             raise ValueError("Invalid MFA challenge")
-        return {"mfa_required": True, "mfakey": key}
+        response = {"mfa_required": True, "mfakey": key}
+        if "mask_key" in identity:
+            response.update(mask_key=identity["mask_key"], mfa_key=identity["mfa_key"])
+        return response
     identity = validate_identity(identity)
     return {"username": identity["username"], "_session_cookies": identity["cookies"]}
 
@@ -33,7 +35,7 @@ def send_verify_code(mfakey, verification_type):
     if settings.app_mode == "demo":
         raise ValueError("MFA unavailable in demo mode")
     result = importlib.import_module(settings.local_auth_module).send_verify_code(mfakey, verification_type)
-    if result is False:
+    if result not in ("success", "succes"):
         raise ValueError("Verification code delivery failed")
 
 def issue_token(user):

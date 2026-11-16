@@ -350,8 +350,9 @@ function App() {
   const [name, setName] = useState(""),
     [password, setPassword] = useState("");
   const [mfakey, setMfakey] = useState("");
+  const [maskKey, setMaskKey] = useState("");
   const [verifyCode, setVerifyCode] = useState("");
-  const [verifyType, setVerifyType] = useState<"phone" | "email">("phone");
+  const [verifyType, setVerifyType] = useState<"sms" | "email">("sms");
   const [resendAt, setResendAt] = useState(0);
   const [resendSeconds, setResendSeconds] = useState(0);
   useEffect(() => {
@@ -445,7 +446,7 @@ function App() {
       token = "";
       setUser(null);
       setPassword("");
-      setMfakey("");
+      setMfakey(""); setMaskKey("");
       setVerifyCode("");
       setSelected(null);
       setRun(null);
@@ -771,16 +772,19 @@ function App() {
           onSubmit={(e) => {
             e.preventDefault();
             void act(async () => {
-              const res = await api<{ mfa_required: true; mfakey: string } | {
+              const res = await api<{ mfa_required: true; mfakey: string; mask_key?: string; mfa_key?: string } | {
                 access_token: string;
                 user: User;
                 mode: string;
               }>("/auth/login", {
                 method: "POST",
-                body: json({ username: name, password, ...(mfakey ? { code: verifyCode.trim() } : {}) }),
+                body: json({ username: name, password, verification_type: verifyType,
+                  ...(mfakey ? { code: verifyCode.trim() } : {}),
+                  ...(maskKey ? { mask_key: maskKey, mfa_key: mfakey } : {}) }),
               });
               if ("mfa_required" in res) {
-                setMfakey(res.mfakey);
+                setMfakey(res.mfa_key ?? res.mfakey);
+                setMaskKey(res.mask_key ?? "");
                 setVerifyCode("");
                 return;
               }
@@ -788,11 +792,11 @@ function App() {
               setUser(res.user);
               setMode(res.mode);
               setPassword("");
-              setMfakey("");
+              setMfakey(""); setMaskKey("");
               setVerifyCode("");
               setResendAt(0);
               setResendSeconds(0);
-              setVerifyType("phone");
+              setVerifyType("sms");
               setTab("reports");
             });
           }}
@@ -804,7 +808,7 @@ function App() {
               autoComplete="username"
               disabled={busy}
               value={name}
-              onChange={(e) => { setName(e.target.value); setMfakey(""); setVerifyCode(""); }}
+              onChange={(e) => { setName(e.target.value); setMfakey(""); setMaskKey(""); setVerifyCode(""); }}
             />
           </label>
           <label>
@@ -815,7 +819,7 @@ function App() {
               autoComplete="current-password"
               disabled={busy}
               value={password}
-              onChange={(e) => { setPassword(e.target.value); setMfakey(""); setVerifyCode(""); }}
+              onChange={(e) => { setPassword(e.target.value); setMfakey(""); setMaskKey(""); setVerifyCode(""); }}
             />
           </label>
           {mfakey && <div className="login-verification">
@@ -826,15 +830,15 @@ function App() {
                 onChange={e => setVerifyCode(e.target.value)} />
               <button type="button" disabled={busy || resendSeconds > 0} onClick={() => {
                 if (busy || Date.now() < resendAt) return;
-                setResendAt(Date.now() + 60000);
-                setResendSeconds(60);
                 void act(async () => {
                   await api("/auth/send-verify-code", { method: "POST", body: json({ mfakey, type: verifyType }) });
-                  setNotice("验证码已发送，请查收" + (verifyType === "phone" ? "手机短信" : "邮箱"));
+                  setResendAt(Date.now() + 60000);
+                  setResendSeconds(60);
+                  setNotice("发送成功，请查收" + (verifyType === "sms" ? "手机短信" : "邮箱"));
                 });
               }}>{resendSeconds > 0 ? `${resendSeconds}s 后重发` : "发送验证码"}</button>
               <div className="verification-type" role="group" aria-label="验证码接收方式">
-                {([['phone', '手机'], ['email', '邮箱']] as const).map(([value, label]) =>
+                {([['sms', '手机'], ['email', '邮箱']] as const).map(([value, label]) =>
                   <button key={value} type="button" aria-pressed={verifyType === value}
                     disabled={busy}
                     onClick={() => { setVerifyType(value); setVerifyCode(""); setNotice(""); }}>{label}</button>)}

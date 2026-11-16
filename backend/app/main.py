@@ -63,7 +63,7 @@ def health():
 @app.post("/api/auth/login")
 def login(data: Login, db=Depends(get_db)):
     try:
-        identity = authenticate(data.username, data.password, data.code)
+        identity = authenticate(data.username, data.password, data.code, data.verification_type, data.mask_key, data.mfa_key)
         if identity.get("mfa_required"):
             return identity
         name = identity["username"]
@@ -83,7 +83,7 @@ def login(data: Login, db=Depends(get_db)):
     if not user.active:
         raise HTTPException(403, "账号已停用")
     if "_session_cookies" in identity:
-        store_credentials(db, name, data.username, data.password, identity["_session_cookies"])
+        store_credentials(db, name, data.username, data.password, identity["_session_cookies"], data.verification_type)
     audit(db, user, "session.login", user.id)
     db.commit()
     return {"access_token": issue_token(user), "token_type": "bearer",
@@ -94,7 +94,7 @@ def request_verify_code(data: SendVerifyCode):
     try:
         send_verify_code(data.mfakey, data.type)
     except Exception:
-        raise HTTPException(400, "验证码发送失败，请稍后重试或联系管理员") from None
+        raise HTTPException(400, "发送失败，请联系管理员解决") from None
     return {"ok": True}
 
 @app.get("/api/auth/me")
