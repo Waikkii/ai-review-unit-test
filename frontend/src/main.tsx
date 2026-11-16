@@ -831,7 +831,7 @@ function App() {
               <button type="button" disabled={busy || resendSeconds > 0} onClick={() => {
                 if (busy || Date.now() < resendAt) return;
                 void act(async () => {
-                  await api("/auth/send-verify-code", { method: "POST", body: json({ mfakey, type: verifyType }) });
+                  await api("/auth/send-verify-code", { method: "POST", body: json({ type: verifyType, maskkey: maskKey, mfakey }) });
                   setResendAt(Date.now() + 60000);
                   setResendSeconds(60);
                   setNotice("发送成功，请查收" + (verifyType === "sms" ? "手机短信" : "邮箱"));

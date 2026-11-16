@@ -31,10 +31,10 @@ def authenticate(username, password, code=None, verification_type="sms", mask_ke
     identity = validate_identity(identity)
     return {"username": identity["username"], "_session_cookies": identity["cookies"]}
 
-def send_verify_code(mfakey, verification_type):
+def send_verify_code(verification_type, maskkey, mfakey):
     if settings.app_mode == "demo":
         raise ValueError("MFA unavailable in demo mode")
-    result = importlib.import_module(settings.local_auth_module).send_verify_code(mfakey, verification_type)
+    result = importlib.import_module(settings.local_auth_module).send_verify_code(verification_type, maskkey, mfakey)
     if result != "success":
         raise ValueError("Verification code delivery failed")
 

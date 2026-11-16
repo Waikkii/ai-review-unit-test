@@ -24,8 +24,8 @@ def mfa_adapter(client, monkeypatch):
             return {"result": "fail", "reason": "验证码错误，请重试"}
         return {"result": "success", "info": {"username": "verified-account", "cookies": {"session": "private-cookie"}}}
 
-    def send(key, kind):
-        calls["send"].append((key, kind))
+    def send(kind, maskkey, mfakey):
+        calls["send"].append((kind, maskkey, mfakey))
         return "success"
 
     module.login, module.send_verify_code = login, send
@@ -68,12 +68,17 @@ def test_mfa_does_not_authenticate_until_code_is_verified(client, mfa_adapter, v
 @pytest.mark.parametrize("kind", ["sms", "email"])
 def test_sends_code_without_login_token(client, mfa_adapter, kind):
     _, calls = mfa_adapter
-    response = client.post("/api/auth/send-verify-code", json={"mfakey": "challenge", "type": kind})
+    response = client.post("/api/auth/send-verify-code", json={"type": kind, "maskkey": "mask", "mfakey": "challenge"})
     assert response.status_code == 200 and response.json() == {"ok": True}
-    assert calls["send"] == [("challenge", kind)]
+    assert calls["send"] == [(kind, "mask", "challenge")]
 
 
-@pytest.mark.parametrize("data", [{"mfakey": "", "type": "sms"}, {"mfakey": "key", "type": "phone"}])
+@pytest.mark.parametrize("data", [
+    {"maskkey": "mask", "mfakey": "", "type": "sms"},
+    {"maskkey": "mask", "mfakey": "key", "type": "phone"},
+    {"mfakey": "key", "type": "sms"},
+    {"maskkey": "", "mfakey": "key", "type": "sms"},
+])
 def test_rejects_invalid_delivery_requests(client, mfa_adapter, data):
     _, calls = mfa_adapter
     assert client.post("/api/auth/send-verify-code", json=data).status_code == 422
@@ -85,7 +90,7 @@ def test_delivery_errors_are_not_exposed(client, mfa_adapter):
     def fail(*args):
         raise RuntimeError("private-mfakey-and-response")
     module.send_verify_code = fail
-    response = client.post("/api/auth/send-verify-code", json={"mfakey": "challenge", "type": "email"})
+    response = client.post("/api/auth/send-verify-code", json={"maskkey": "mask", "mfakey": "challenge", "type": "email"})
     assert response.status_code == 400 and "private" not in response.text
     assert response.json() == {"detail": "发送失败，请联系管理员解决"}
 
@@ -94,7 +99,7 @@ def test_delivery_errors_are_not_exposed(client, mfa_adapter):
 def test_delivery_failure_results_do_not_report_success(client, mfa_adapter, result):
     module, _ = mfa_adapter
     module.send_verify_code = lambda *args: result
-    response = client.post('/api/auth/send-verify-code', json={"mfakey": "challenge", "type": "sms"})
+    response = client.post('/api/auth/send-verify-code', json={"maskkey": "mask", "mfakey": "challenge", "type": "sms"})
     assert response.status_code == 400
     assert response.json() == {"detail": "发送失败，请联系管理员解决"}
 

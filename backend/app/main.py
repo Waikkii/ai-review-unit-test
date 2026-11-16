@@ -93,7 +93,7 @@ def login(data: Login, db=Depends(get_db)):
 @app.post("/api/auth/send-verify-code")
 def request_verify_code(data: SendVerifyCode):
     try:
-        send_verify_code(data.mfakey, data.type)
+        send_verify_code(data.type, data.maskkey, data.mfakey)
     except Exception:
         raise HTTPException(400, "发送失败，请联系管理员解决") from None
     return {"ok": True}

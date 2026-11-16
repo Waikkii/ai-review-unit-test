@@ -16,6 +16,7 @@ class Login(StrictModel):
     mfa_key: str | None = Field(default=None, min_length=1, max_length=4096)
 
 class SendVerifyCode(StrictModel):
+    maskkey: str = Field(min_length=1, max_length=4096)
     mfakey: str = Field(min_length=1, max_length=4096)
     type: Literal["sms", "email"]
 
