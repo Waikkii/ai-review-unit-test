@@ -564,6 +564,34 @@ def export(run_id: str, include_reviewed: bool = False, user=Depends(current_use
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="review-{run.id}.xlsx"'})
 
+@app.get("/api/runs/{run_id}/archive")
+def download_result_archive(run_id: str, user=Depends(current_user), db=Depends(get_db)):
+    run = visible_run(db, run_id, user)
+    report = visible_report(db, run.report_id, user)
+    from .result_archive import export_archive
+    content = export_archive(db, report, run)
+    audit(db, user, 'run.archive_export', run.id, after={'filename': report.filename})
+    db.commit()
+    return Response(content, media_type='application/json',
+                    headers={'Content-Disposition': f'attachment; filename="review-{run.id}.review.json"'})
+
+
+@app.post("/api/reports/{report_id}/import-results", status_code=201)
+def upload_result_archive(report_id: str, file: UploadFile = File(...), user=Depends(current_user), db=Depends(get_db)):
+    report = visible_report(db, report_id, user, write=True)
+    if not (file.filename or '').lower().endswith('.json'):
+        raise HTTPException(400, '请上传本系统导出的审查结果 JSON 文件')
+    content = file.file.read(settings.max_upload_mb * 1024 * 1024 + 1)
+    if len(content) > settings.max_upload_mb * 1024 * 1024:
+        raise HTTPException(413, '审查结果文件超过上传大小限制')
+    from .result_archive import read_archive, import_archive
+    archive = read_archive(content)
+    lock_report(db, report)
+    run = import_archive(db, report, user, archive)
+    db.commit()
+    return {**run_json(run, db), 'pending_item_count': sum(entry.pending for entry in archive.items)}
+
+
 @app.get("/api/keywords")
 def keywords(user=Depends(current_user), db=Depends(get_db)):
     return [keyword_dict(k) for k in db.scalars(select(Keyword).where(

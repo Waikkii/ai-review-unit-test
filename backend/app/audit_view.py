@@ -6,6 +6,8 @@ SUMMARY_ACTIONS = {
     "run.start": ("发起 AI 审查", "review"),
     "report.download": ("下载原始报告", "download"),
     "run.export": ("导出审查结果", "download"),
+    "run.archive_export": ("导出结构化审查结果", "download"),
+    "run.import": ("导入审查结果", "review"),
     "keyword.request": ("提交关键词变更", "keyword"),
     "report.clear": ("清除报告历史", "report"),
     "run.clear": ("删除审查批次", "review"),

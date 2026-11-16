@@ -62,7 +62,7 @@ def detach_retained_results(db):
 def create_run(db, report, actor, selection_mode, base_run=None):
     from .services import audit, keyword_dict
     if db.scalar(select(Run.id).where(Run.report_id == report.id, Run.state.in_(ACTIVE_STATES))):
-        raise HTTPException(409, "该报告已有活动审查，请先继续或重新开始")
+        raise HTTPException(409, "该报告已有活动审查，请先继续、结束或中止")
     candidates = db.execute(select(Item, ItemReviewState).outerjoin(ItemReviewState,
         ItemReviewState.item_id == Item.id).where(Item.report_id == report.id)
         .order_by(Item.domain, Item.row_number)).all()

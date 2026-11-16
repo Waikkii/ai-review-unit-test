@@ -389,6 +389,7 @@ function App() {
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadLabel, setUploadLabel] = useState("正在上传并解析 Excel");
   const [reports, setReports] = useState<Report[]>([]),
     [selected, setSelected] = useState<Report | null>(null);
   const [items, setItems] = useState<Item[]>([]),
@@ -717,6 +718,7 @@ function App() {
   );
   const chooseReport = (r: Report) => {
     runViewVersion.current += 1;
+    setRuns([]);
     setSelected(r);
     setRun(null);
     setResults([]);
@@ -756,19 +758,41 @@ function App() {
     setResultPage(0);
     setTableFilters({}); setTableOptions({});
   };
-  const controlRun = (operation: "pause" | "resume" | "restart" | "abort") => act(async () => {
+  const toggleHistory = (history: Run) => {
+    if (run?.id !== history.id) { chooseRun(history); return; }
+    runViewVersion.current += 1;
+    setRun(null);
+    setResults([]);
+    setTableFilters({}); setTableOptions({});
+    setItemPage(0); setResultPage(0);
+  };
+  const hasActiveHistory = runs.some(history => ["queued", "running", "pausing", "paused"].includes(history.state));
+  const controlRun = (operation: "pause" | "resume" | "abort") => act(async () => {
     if (!run) return;
-    const updated = await api<Run>(`/runs/${run.id}/${operation}`, {
-      method: "POST", ...(operation === "restart" ? { body: json({ selection_mode: reviewMode }) } : {}),
-    });
-    if (operation === "restart") chooseRun(updated);
-    else {
-      runViewVersion.current += 1;
-      setRun(updated);
-      setRuns(previous => previous.map(history => history.id === updated.id ? updated : history));
-    }
-    setNotice(operation === "abort" ? "审查已中止，可删除该批次历史。" : operation === "restart" ? `已按${updated.selection_mode === "missing" ? "查漏补缺" : "全量审查"}重新开始，旧批次保留。` : operation === "pause" ? "已请求暂停，将在当前项结束后生效。" : "已继续审查。");
+    const updated = await api<Run>(`/runs/${run.id}/${operation}`, { method: "POST" });
+    runViewVersion.current += 1;
+    setRun(updated);
+    setRuns(previous => previous.map(history => history.id === updated.id ? updated : history));
+    setNotice(operation === "abort" ? "审查已中止，可删除该批次历史。" : operation === "pause" ? "已请求暂停，将在当前项结束后生效。" : "已继续审查。");
   });
+  const importResults = (file: File) => {
+    if (!selected || !window.confirm(`向“${selected.filename}”导入审查结果？将新建独立历史，并用文件中的用户备注更新当前报告备注；其他历史的 AI 结果不变。`)) return;
+    void act(async () => {
+      setUploadLabel("正在导入审查结果");
+      setUploading(true);
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const imported = await api<Run & { pending_item_count: number }>(`/reports/${selected.id}/import-results`, {
+          method: "POST", body: form,
+        });
+        setRuns(previous => [imported, ...previous]);
+        chooseRun(imported);
+        setReviewMode("missing");
+        setNotice(`已导入 ${imported.total} 个测试项，${imported.pending_item_count} 项待审查，可继续查漏补缺`);
+      } finally { setUploading(false); }
+    });
+  };
   const kwFrom = (k: Keyword) => {
     setEntry(Object.fromEntries(Object.keys(keywordFields).map(key => [key, String(k.payload[key] ?? "")])));
     setAction("update");
@@ -870,7 +894,7 @@ function App() {
             version={row.noteVersion ?? 0} editable={canEdit && !uploading} onSaved={refreshNotes} /></td>
           <td>{canEdit ? <select className={`review-state-select ${row.pendingReview ? "review-pending" : "review-done"}`} aria-label="修改审查状态"
             value={row.pendingReview ? "pending" : "reviewed"}
-            disabled={busy || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
+            disabled={busy || hasActiveHistory || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
             onChange={event => void changeReviewState(row, event.target.value)}>
             <option value="pending">待审查</option><option value="reviewed">已审查</option>
           </select> : <span className={`review-state ${row.pendingReview ? "review-pending" : "review-done"}`}>{row.pendingReview ? "待审查" : "已审查"}</span>}</td>
@@ -1106,6 +1130,7 @@ function App() {
                     e.target.value = "";
                     if (file)
                       void act(async () => {
+                        setUploadLabel("正在上传并解析 Excel");
                         setUploading(true);
                         try {
                         const form = new FormData();
@@ -1165,13 +1190,21 @@ function App() {
                         </button>
                         {selected.owner_id === user.id && (
                           <>
+                          <label className="button" aria-disabled={busy || hasActiveHistory} title="仅可导入同一份原始 Excel 对应的审查结果 JSON">
+                            导入审查结果
+                            <input className="file-input" aria-label="导入审查结果" type="file" accept=".json,application/json"
+                              disabled={busy || hasActiveHistory} onChange={event => {
+                                const file = event.target.files?.[0]; event.target.value = "";
+                                if (file) importResults(file);
+                              }} />
+                          </label>
                           <select className="review-mode" aria-label="审查模式" value={reviewMode}
                             onChange={e => setReviewMode(e.target.value as "full" | "missing")}>
                             <option value="full">全量审查</option><option value="missing">查漏补缺</option>
                           </select>
                           <button
                             className="primary"
-                            disabled={busy || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
+                            disabled={busy || hasActiveHistory || !!run && ["queued", "running", "pausing", "paused"].includes(run.state)}
                             onClick={() =>
                               void act(async () => {
                                 const r = await api<Run>(
@@ -1195,9 +1228,11 @@ function App() {
                       {runs.map((r) => <div key={r.id} className={`run-chip ${run?.id === r.id ? "selected" : ""}`}>
                         <button
                           disabled={busy}
-                          onClick={() => chooseRun(r)}
+                          aria-pressed={run?.id === r.id}
+                          title={run?.id === r.id ? "再次点击取消选择，查看全部测试项" : "查看本次审查历史"}
+                          onClick={() => toggleHistory(r)}
                         >
-                          {historyTime(r.created_at)} · {r.id.slice(0, 8)} · {labels[r.state]} · {r.completed}
+                          {historyTime(r.created_at)} · {r.id.slice(0, 8)} · {r.mode === "imported" ? "已导入" : labels[r.state]} · {r.completed}
                           /{r.total}
                         </button>
                         {selected.owner_id === user.id && <button className="delete-icon" aria-label={`删除审查批次：${r.id.slice(0, 8)}`}
@@ -1208,21 +1243,23 @@ function App() {
                     </details>
                     {run && <>
                       <div className="progress-head">
-                        <b>{labels[run.state]} · {run.completed}/{run.total}</b>
+                        <b>{run.mode === "imported" ? "已导入" : labels[run.state]} · {run.completed}/{run.total}</b>
                         <span>{run.failed} 项执行失败</span>
                       </div>
                       <progress max={run.total || 1} value={run.completed} />
                       <div className="section-head">
                         <div className="actions">
-                          <button onClick={() => { runViewVersion.current += 1; setItemPage(0); setRun(null); }}>查看全部测试项</button>
                           {selected.owner_id === user.id && <>
                             {["queued", "running", "pausing"].includes(run.state) && <button disabled={busy || run.state === "pausing"}
                               onClick={() => void controlRun("pause")}>{run.state === "pausing" ? "正在暂停…" : "暂停"}</button>}
                             {["paused", "blocked"].includes(run.state) && <button disabled={busy} onClick={() => void controlRun("resume")}>继续</button>}
                             {["queued", "running", "pausing", "paused", "blocked"].includes(run.state) && <button disabled={busy}
                               aria-label="中止审查" onClick={() => void controlRun("abort")}>中止</button>}
-                            <button disabled={busy} onClick={() => void controlRun("restart")}>重新开始（{reviewMode === "missing" ? "查漏补缺" : "全量"}）</button>
                           </>}
+                          <button disabled={["queued", "running", "pausing", "paused"].includes(run.state) || busy}
+                            onClick={() => void act(async () => {
+                              await download(`/runs/${run.id}/archive`, `审查结果-${run.id.slice(0, 8)}.review.json`);
+                            })}>导出审查结果</button>
                           <button disabled={["queued", "running", "pausing", "paused"].includes(run.state) || busy}
                             onClick={() => void act(async () => {
                               await download("/runs/" + run.id + "/export?include_reviewed=true", "审查结果-" + run.id.slice(0, 8) + ".xlsx");
@@ -1430,13 +1467,13 @@ function App() {
         )}
       </main>
       {authAlert && <div className="overlay"><section role="alertdialog" aria-modal="true" aria-label="审查已停止" className="modal card">
-        <h2>审查已停止</h2><p>{authAlert}</p><p className="muted">请联系管理员处理，重新登录后可继续，或按所选模式重新开始。</p>
+        <h2>审查已停止</h2><p>{authAlert}</p><p className="muted">请联系管理员处理，重新登录后可继续；中止后可按所选模式重新发起 AI 审查。</p>
         <button className="primary" onClick={() => setAuthAlert("")}>我知道了</button>
       </section></div>}
       {uploading && createPortal(<div className="upload-overlay">
-        <section role="dialog" aria-modal="true" aria-label="正在解析 Excel" className="upload-progress card">
+        <section role="dialog" aria-modal="true" aria-label={uploadLabel} className="upload-progress card">
           <div className="loading-spinner" aria-hidden="true" />
-          <h2>正在上传并解析 Excel</h2><p role="status">请稍候…</p>
+          <h2>{uploadLabel}</h2><p role="status">请稍候…</p>
         </section>
       </div>, document.body)}
       {keywordDialog && <div className="overlay">
