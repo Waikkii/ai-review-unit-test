@@ -15,11 +15,11 @@ def mfa_adapter(client, monkeypatch):
     module = types.ModuleType("test_mfa_adapter")
     calls = {"login": [], "send": []}
 
-    def login(username, password, code, verification_type, mask_key, mfa_key):
-        calls["login"].append((username, password, code, verification_type, mask_key, mfa_key))
+    def login(username, password, code, verification_type, maskkey, mfakey):
+        calls["login"].append((username, password, code, verification_type, maskkey, mfakey))
         if code is None:
             return {"result": "verify", "mask_key": "mask-for-current-login", "mfa_key": "challenge-for-current-login"}
-        assert (mask_key, mfa_key) == ('mask-for-current-login', 'challenge-for-current-login')
+        assert (maskkey, mfakey) == ('mask-for-current-login', 'challenge-for-current-login')
         if code != "012345":
             return {"result": "fail", "reason": "验证码错误，请重试"}
         return {"result": "success", "info": {"username": "verified-account", "cookies": {"session": "private-cookie"}}}
@@ -100,9 +100,10 @@ def test_delivery_failure_results_do_not_report_success(client, mfa_adapter, res
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
-def test_two_argument_adapter_still_logs_in(client, mfa_adapter, wrapped):
+def test_six_argument_adapter_logs_in_directly(client, mfa_adapter, wrapped):
     module, _ = mfa_adapter
-    def login(username, password):
+    def login(username, password, code, verification_type, maskkey, mfakey):
+        assert (username, password, code, verification_type, maskkey, mfakey) == ('account', 'password', None, 'sms', None, None)
         identity = {"username": username, "cookies": {"session": "cookie"}}
         return {"result": "success", "info": identity} if wrapped else identity
     module.login = login
@@ -182,8 +183,8 @@ def test_refresh_uses_saved_email_channel(client, mfa_adapter):
     with Session() as db:
         store_credentials(db, 'account', 'account', 'password', {"session": "old"}, 'email')
         db.commit()
-    def login(username, password, code, verification_type):
-        calls['login'].append((username, password, code, verification_type))
+    def login(username, password, code, verification_type, maskkey, mfakey):
+        calls['login'].append((username, password, code, verification_type, maskkey, mfakey))
         return {"result": "success", "info": {"username": username, "cookies": {"session": "new"}}}
     def fetch(url, cookies):
         if cookies['session'] == 'old':
@@ -191,4 +192,15 @@ def test_refresh_uses_saved_email_channel(client, mfa_adapter):
         return []
     module.login, module.fetchimage = login, fetch
     assert download_with_session('https://intranet/image', 'account') == []
-    assert calls['login'] == [('account', 'password', None, 'email')]
+    assert calls['login'] == [('account', 'password', None, 'email', None, None)]
+
+
+def test_login_type_error_does_not_retry_with_fewer_arguments(client, mfa_adapter):
+    module, calls = mfa_adapter
+    def login(username, password, code, verification_type, maskkey, mfakey):
+        calls['login'].append((username, password, code, verification_type, maskkey, mfakey))
+        raise TypeError('private-adapter-error')
+    module.login = login
+    response = client.post('/api/auth/login', json={'username': 'account', 'password': 'password'})
+    assert response.status_code == 401
+    assert calls['login'] == [('account', 'password', None, 'sms', None, None)]

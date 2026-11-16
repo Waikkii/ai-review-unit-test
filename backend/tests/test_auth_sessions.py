@@ -17,8 +17,8 @@ def adapter(monkeypatch, *, fail_retry=False, initial_valid=False, fail_login=Fa
     module = types.ModuleType("fake_auth_sessions")
     calls = {"login": [], "fetch": []}
 
-    def login(username, password):
-        calls["login"].append((username, password))
+    def login(username, password, code, verification_type, maskkey, mfakey):
+        calls["login"].append((username, password, code, verification_type, maskkey, mfakey))
         if fail_login:
             raise RuntimeError("do-not-expose-password")
         identity = {"username": "demo", "cookies": {"session": "fresh-cookie-secret"}}
@@ -48,7 +48,7 @@ def test_cookies_reused_or_refreshed_once_and_only_encrypted_at_rest(client, mon
     result = download_with_session("http://intranet.example/a.jpg", "demo")
     assert result[0][1] == "image/jpeg"
     assert len(calls["fetch"]) == (1 if initial_valid else 2)
-    assert calls["login"] == ([] if initial_valid else [("original-login-name", "password-secret-123")])
+    assert calls["login"] == ([] if initial_valid else [("original-login-name", "password-secret-123", None, "sms", None, None)])
     with Session() as db:
         encrypted = db.get(SessionCredential, "demo").encrypted
         assert all(secret not in encrypted for secret in ["password-secret-123", "old-cookie-secret", "fresh-cookie-secret"])

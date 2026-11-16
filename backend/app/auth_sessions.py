@@ -2,7 +2,6 @@
 import base64
 import hashlib
 import importlib
-import inspect
 import json
 from datetime import timedelta
 from cryptography.fernet import Fernet, InvalidToken
@@ -67,21 +66,8 @@ def validate_identity(identity):
     return identity
 
 
-def call_adapter_login(module, username, password, code=None, verification_type="sms", mask_key=None, mfa_key=None):
-    # 根据函数签名兼容旧适配器，不因业务内部 TypeError 重复执行登录请求。
-    signature = inspect.signature(module.login)
-    args = (username, password, code, verification_type, mask_key, mfa_key)
-    try:
-        signature.bind(*args)
-    except TypeError:
-        if mask_key is not None or mfa_key is not None:
-            raise
-        try:
-            signature.bind(*args[:4])
-        except TypeError:
-            return module.login(username, password) if code is None else module.login(username, password, code=code)
-        return module.login(*args[:4])
-    return module.login(*args)
+def call_adapter_login(module, username, password, code=None, verification_type="sms", maskkey=None, mfakey=None):
+    return module.login(username, password, code, verification_type, maskkey, mfakey)
 
 
 def store_credentials(db, username, login_username, password, cookies, verification_type="sms"):
