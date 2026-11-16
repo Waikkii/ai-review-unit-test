@@ -5,10 +5,10 @@ import importlib
 import json
 from datetime import timedelta
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import delete, update
+from sqlalchemy import delete, update, select
 from .config import settings
 from .db import Session, now
-from .models import SessionCredential
+from .models import SessionCredential, BrowserSession, User
 
 AUTH_FAILURE_MESSAGE = "图片访问认证失败，自动重新登录或重试后仍失败。请联系管理员处理，后续审查已停止。"
 
@@ -82,6 +82,19 @@ def store_credentials(db, username, login_username, password, cookies, verificat
         db.add(SessionCredential(username=username, encrypted=encrypted))
 
 
+def retain_active_credentials(db, username):
+    record = db.get(SessionCredential, username)
+    cutoff = now() - timedelta(seconds=max(1, min(1800, settings.credential_ttl_seconds // 2)))
+    if record is None or record.updated_at >= cutoff:
+        return
+    previous = record.encrypted
+    payload = _decode(previous)
+    encrypted = _cipher().encrypt(json.dumps(payload).encode()).decode()
+    # 保留活跃用户的加密凭据；不覆盖并发重登获取的新 Cookie，也不改变 Cookie 版本。
+    db.execute(update(SessionCredential).where(SessionCredential.username == username,
+               SessionCredential.encrypted == previous).values(encrypted=encrypted, updated_at=now()))
+
+
 def _load(username):
     with Session() as db:
         record = db.get(SessionCredential, username)
@@ -108,9 +121,20 @@ def _request_images(module, url, cookies):
         raise
 
 
+def invalidate_browser_sessions(username):
+    with Session() as db:
+        db.execute(delete(BrowserSession).where(BrowserSession.user_id.in_(
+            select(User.id).where(User.username == username))))
+        db.commit()
+
+
 def download_with_session(url: str, username: str) -> list[tuple[str, str]]:
     module = importlib.import_module(settings.local_auth_module)
-    payload, version = _load(username)
+    try:
+        payload, version = _load(username)
+    except SessionAuthFailure:
+        invalidate_browser_sessions(username)
+        raise
     try:
         return _request_images(module, url, payload["cookies"])
     except CookieExpired:
@@ -138,4 +162,5 @@ def download_with_session(url: str, username: str) -> list[tuple[str, str]]:
             db.commit()
         return _request_images(module, url, payload["cookies"])
     except Exception:
+        invalidate_browser_sessions(username)
         raise SessionAuthFailure() from None

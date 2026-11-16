@@ -10,6 +10,13 @@ class User(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[object] = mapped_column(DateTime, default=now)
 
+class BrowserSession(Base):
+    __tablename__ = "browser_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    last_activity_at: Mapped[object] = mapped_column(DateTime, default=now, index=True)
+
+
 class Report(Base):
     __tablename__ = "reports"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

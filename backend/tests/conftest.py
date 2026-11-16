@@ -32,5 +32,7 @@ def headers(client):
             if user.role == 'none':
                 user.role = 'user'
                 db.commit()
+        # 此 helper 测试显式 Bearer 身份；浏览器 Cookie 行为由专门用例验证。
+        client.cookies.clear()
         return {"Authorization": "Bearer " + response.json()["access_token"]}
     return login

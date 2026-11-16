@@ -12,6 +12,16 @@
 - AI 请求由本地 review_item 实现；本机 `.env` 可配置 `MODEL` 和 `APPLY_TOKEN`，在函数中通过 `from app.config import settings` 读取 `settings.model`、`settings.apply_token`。令牌由本地函数按实际接口要求使用，框架不会自动添加请求头。`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 继续兼容，审查记录优先使用 `MODEL`，为空时使用 `AI_MODEL`。修改配置后需重启 API 和 Worker。
 - 旧适配器及其配置已移除，真实接入统一使用上述模块；原始模型结果、任务快照和至少一次调用语义保留。
 
+## 刷新恢复与无操作超时
+
+浏览器登录成功后使用独立的 HttpOnly、SameSite=Strict 会话 Cookie（review_session），内网 Cookie 仍只保存在服务器加密凭据中。数据库 browser_sessions 仅保存随机会话标识的 SHA-256 和用户、最后操作时间。页面刷新、新开同站点页面时通过 `/api/auth/session` 恢复用户、环境及当前权限，不再次调用 login。浏览器不持久保存密码、验证码、验证 key 或 Bearer Token；localStorage 仅保存用户 ID 和最后操作时间，用于多标签页协调空闲计时。
+
+无操作时长沿用 `.env` 的 `TOKEN_MINUTES`，默认 60 分钟。鼠标、键盘、触摸等用户操作通过 `/api/auth/activity` 更新服务端操作时间并续期会话 Cookie；报告轮询、读取会话等后台请求不会续期。前后端均检查超时，超时会话不能靠续期请求复活；页面无操作超时后仅结束浏览器会话，不删除后台审查所需的内网凭据；手动退出登录仍清理凭据。持续操作时不受原 Bearer Token 固定到期时间影响。Bearer 接口仍供已有 API 调用使用，原固定有效期不变。
+
+用户持续操作时会延长加密凭据的保留时间，避免仅因凭据存储期限导致活跃用户被要求重新登录。主动退出、管理员停用账号会撤销服务端浏览器会话；角色变化仍实时校验。内网 Cookie 失效通常在附件下载时发现，保持原来仅自动重登一次的策略：成功则继续，失败或需验证码则撤销该用户浏览器会话，页面下次请求收到 401 后回到登录页。浏览器无法在尚未请求内网接口时预知内网 Cookie 是否失效。临时网络故障导致恢复请求失败时保留会话，页面提供重试入口。
+
+升级会新增 browser_sessions 表，不修改历史报告；使用正常重建启动升级流程，Linux 手动部署先执行 `python scripts/run.py migrate`。Windows HTTP 局域网部署可用；通过 HTTPS 访问时会话 Cookie 额外启用 Secure。Cookie 认证的写请求校验 Origin，页面和 API 保持同源。
+
 ## 用户权限与首次登录
 
 首次通过内网认证的新账号默认角色为 `none`（无权限用户），只可查看自己的登录身份、刷新权限及退出登录，不能访问报告、审查、关键词、操作记录、导出或用户管理等业务接口。页面显示等待管理员授权，不加载业务数据。`BOOTSTRAP_ADMINS` 中配置的已认证稳定账号在首次创建时为管理员；演示模式内置 admin 仍为管理员。

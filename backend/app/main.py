@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from hashlib import sha256
 import json
 import logging
-from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, Depends, File, UploadFile, HTTPException, Query, Request
 from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, update, delete, or_, and_, func
@@ -18,9 +18,10 @@ from .reviewer import rule_version
 from .services import audit, visible_report, visible_run, keyword_dict, apply_change
 from .audit_view import SUMMARY_ACTIONS, describe_activity
 from .review_workflow import ACTIVE_STATES, lock_report, create_run, is_pending, work_results, run_json as workflow_run_json
-from .models import RunItemReviewState
+from .models import RunItemReviewState, BrowserSession
+from .browser_sessions import COOKIE_NAME, session_hash, idle_seconds, idle_deadline, set_session_cookie, create_browser_session
 from .history_state import pending_expression, is_history_pending
-from .auth_sessions import store_credentials, AUTH_FAILURE_MESSAGE, AuthenticationRejected
+from .auth_sessions import store_credentials, retain_active_credentials, SessionAuthFailure, AUTH_FAILURE_MESSAGE, AuthenticationRejected
 from .result_filters import effective_result_expressions
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,11 @@ async def conflict_handler(request, exc):
 
 @app.middleware("http")
 async def security_headers(request, call_next):
+    if (request.method not in {"GET", "HEAD", "OPTIONS"} and COOKIE_NAME in request.cookies
+            and "authorization" not in request.headers):
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+            return JSONResponse(status_code=403, content={"detail": "请求来源不匹配，请刷新页面后重试"})
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -62,7 +68,7 @@ def health():
     return {"status": "ok", "mode": settings.app_mode}
 
 @app.post("/api/auth/login")
-def login(data: Login, db=Depends(get_db)):
+def login(data: Login, request: Request, response: Response, db=Depends(get_db)):
     try:
         identity = authenticate(data.username, data.password, data.code, data.verification_type, data.mask_key, data.mfa_key)
         if identity.get("mfa_required"):
@@ -86,9 +92,11 @@ def login(data: Login, db=Depends(get_db)):
     if "_session_cookies" in identity:
         store_credentials(db, name, data.username, data.password, identity["_session_cookies"], data.verification_type)
     audit(db, user, "session.login", user.id)
+    create_browser_session(db, user.id, request, response)
     db.commit()
     return {"access_token": issue_token(user), "token_type": "bearer",
-            "user": serial(user, "id username role active"), "mode": settings.app_mode}
+            "user": serial(user, "id username role active"), "mode": settings.app_mode,
+            "idle_timeout_seconds": idle_seconds()}
 
 @app.post("/api/auth/send-verify-code")
 def request_verify_code(data: SendVerifyCode):
@@ -102,11 +110,44 @@ def request_verify_code(data: SendVerifyCode):
 def me(user=Depends(authenticated_user)):
     return serial(user, "id username role active")
 
+@app.get("/api/auth/session")
+def restore_session(user=Depends(authenticated_user)):
+    return {"user": serial(user, "id username role active"), "mode": settings.app_mode,
+            "idle_timeout_seconds": idle_seconds()}
+
+@app.post("/api/auth/activity")
+def record_activity(request: Request, response: Response, user=Depends(authenticated_user), db=Depends(get_db)):
+    key = getattr(request.state, "browser_session_hash", None)
+    if key is None:
+        raise HTTPException(401, "登录已失效，请重新登录")
+    updated = db.execute(update(BrowserSession).where(BrowserSession.token_hash == key,
+                        BrowserSession.last_activity_at > idle_deadline()).values(last_activity_at=now()))
+    if updated.rowcount != 1:
+        raise HTTPException(401, "登录已失效，请重新登录")
+    try:
+        retain_active_credentials(db, user.username)
+    except SessionAuthFailure:
+        raise HTTPException(401, "登录已失效，请重新登录") from None
+    db.commit()
+    set_session_cookie(response, request, request.cookies[COOKIE_NAME])
+    return {"ok": True}
+
+@app.post("/api/auth/session/end")
+def end_browser_session(request: Request, response: Response, db=Depends(get_db)):
+    value = request.cookies.get(COOKIE_NAME)
+    if value:
+        db.execute(delete(BrowserSession).where(BrowserSession.token_hash == session_hash(value)))
+        db.commit()
+    response.delete_cookie(COOKIE_NAME, path="/api")
+    return {"ok": True}
+
 
 @app.post("/api/auth/logout")
-def logout(user=Depends(authenticated_user), db=Depends(get_db)):
+def logout(response: Response, user=Depends(authenticated_user), db=Depends(get_db)):
     db.execute(delete(SessionCredential).where(SessionCredential.username == user.username))
+    db.execute(delete(BrowserSession).where(BrowserSession.user_id == user.id))
     db.commit()
+    response.delete_cookie(COOKIE_NAME, path="/api")
     return {"ok": True}
 
 @app.get("/api/reports")
@@ -612,6 +653,7 @@ def change_user(user_id: str, data: UserChange, user=Depends(admin_user), db=Dep
     target.role, target.active = data.role, data.active
     if not data.active:
         db.execute(delete(SessionCredential).where(SessionCredential.username == target.username))
+        db.execute(delete(BrowserSession).where(BrowserSession.user_id == target.id))
     audit(db, user, "user.permissions", target.id, before, serial(target, "role active"), data.reason)
     db.commit()
     return serial(target, "id username role active")

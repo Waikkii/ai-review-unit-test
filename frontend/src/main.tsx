@@ -133,16 +133,24 @@ const labels: Record<string, string> = {
   cancelled: "已重新开始",
   aborted: "已中止",
 };
-let token = ""; // 仅保存在当前页面内存，关闭/刷新后重新登录。
+let sessionActive = false;
+type SessionInfo = { user: User; mode: string; idle_timeout_seconds: number };
+const activityKey = "review-user-activity";
+const readActivity = (): { user_id: string; at: number } | null => {
+  try { return JSON.parse(localStorage.getItem(activityKey) || "null"); } catch { return null; }
+};
+const writeActivity = (userId: string) => {
+  try { localStorage.setItem(activityKey, JSON.stringify({ user_id: userId, at: Date.now() })); } catch { /* 内存计时仍有效。 */ }
+};
+const clearActivity = () => { try { localStorage.removeItem(activityKey); } catch { /* 存储不可用。 */ } };
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", "Bearer " + token);
   if (init.body && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json");
-  const res = await fetch("/api" + path, { ...init, headers });
+  const res = await fetch("/api" + path, { ...init, credentials: "same-origin", headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: "请求失败" }));
-    if (res.status === 401 && token) window.dispatchEvent(new Event("session-expired"));
+    if (res.status === 401 && sessionActive) window.dispatchEvent(new Event("session-expired"));
     if (res.status === 403 && body.detail === "当前账号无权限，请联系管理员授权")
       window.dispatchEvent(new Event("permission-revoked"));
     throw new Error(
@@ -155,11 +163,11 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 async function download(path: string, name: string) {
   const res = await fetch("/api" + path, {
-    headers: { Authorization: "Bearer " + token },
+    credentials: "same-origin",
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    if (res.status === 401) window.dispatchEvent(new Event("session-expired"));
+    if (res.status === 401 && sessionActive) window.dispatchEvent(new Event("session-expired"));
     if (res.status === 403 && body?.detail === "当前账号无权限，请联系管理员授权")
       window.dispatchEvent(new Event("permission-revoked"));
     throw new Error(typeof body?.detail === "string" ? body.detail
@@ -352,6 +360,10 @@ const NoteCell = React.memo(function NoteCell({ itemId, note, version, editable,
 function App() {
   const [user, setUser] = useState<User | null>(null),
     [mode, setMode] = useState("");
+  const [restoring, setRestoring] = useState(true);
+  const [restoreError, setRestoreError] = useState("");
+  const [restoreVersion, setRestoreVersion] = useState(0);
+  const [idleTimeoutSeconds, setIdleTimeoutSeconds] = useState(3600);
   const authorized = user?.role === "user" || user?.role === "admin";
   const [name, setName] = useState(""),
     [password, setPassword] = useState("");
@@ -447,9 +459,10 @@ function App() {
     }
   };
   useEffect(() => {
-    const expire = () => {
+    const expire = (event: Event) => {
       runViewVersion.current += 1;
-      token = "";
+      sessionActive = false;
+      clearActivity();
       setUser(null);
       setPassword("");
       setMfakey(""); setMaskKey("");
@@ -458,10 +471,94 @@ function App() {
       setRun(null);
       setReports([]);
       setAuthAlert("");
+      setError((event as CustomEvent<string>).detail || "登录已失效，请重新登录");
     };
     window.addEventListener("session-expired", expire);
     return () => window.removeEventListener("session-expired", expire);
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setRestoring(true);
+    setRestoreError("");
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/session", { credentials: "same-origin" });
+        if (cancelled) return;
+        if (response.status === 401) {
+          sessionActive = false;
+          clearActivity();
+          setUser(null);
+          return;
+        }
+        if (!response.ok) throw new Error("暂时无法恢复登录状态，请重试");
+        const restored: SessionInfo = await response.json();
+        if (cancelled) return;
+        sessionActive = true;
+        writeActivity(restored.user.id);
+        setIdleTimeoutSeconds(restored.idle_timeout_seconds ?? 3600);
+        setMode(restored.mode);
+        setUser(restored.user);
+      } catch {
+        if (!cancelled) setRestoreError("暂时无法恢复登录状态，请检查连接后重试");
+      } finally {
+        if (!cancelled) setRestoring(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [restoreVersion]);
+  useEffect(() => {
+    if (!user) return;
+    const userId = user.id;
+    let lastActivity = Date.now();
+    let lastPublished = 0;
+    let lastSent = 0;
+    let pending: number | undefined;
+    let expired = false;
+    const latestActivity = () => {
+      const shared = readActivity();
+      return Math.max(lastActivity, shared?.user_id === userId ? shared.at : 0);
+    };
+    const expireIdle = () => {
+      if (expired) return;
+      expired = true;
+      void fetch("/api/auth/session/end", { method: "POST", credentials: "same-origin" }).catch(() => {});
+      window.dispatchEvent(new CustomEvent("session-expired", { detail: "长时间无操作，已退出登录，请重新登录" }));
+    };
+    const check = () => {
+      if (Date.now() - latestActivity() >= idleTimeoutSeconds * 1000) expireIdle();
+    };
+    const pulse = () => {
+      pending = undefined;
+      if (expired) return;
+      lastSent = Date.now();
+      void api("/auth/activity", { method: "POST" }).catch(() => {});
+    };
+    const touch = () => {
+      check();
+      if (expired) return;
+      lastActivity = Date.now();
+      if (lastActivity - lastPublished > 1000) { writeActivity(userId); lastPublished = lastActivity; }
+      if (lastActivity - lastSent >= 30000) pulse();
+      else if (pending === undefined) pending = window.setTimeout(pulse, 30000 - (lastActivity - lastSent));
+    };
+    const sharedActivity = (event: StorageEvent) => {
+      if (event.key !== activityKey) return;
+      const shared = readActivity();
+      if (!shared) window.dispatchEvent(new Event("session-expired"));
+      else if (shared.user_id !== userId) window.location.reload();
+    };
+    const events = ["pointerdown", "pointermove", "keydown", "wheel", "touchstart", "focus"];
+    events.forEach(name => window.addEventListener(name, touch, { passive: true }));
+    window.addEventListener("storage", sharedActivity);
+    pulse(); // 登录或用户刷新页面是一次实际操作。
+    const timer = window.setInterval(check, 1000);
+    return () => {
+      events.forEach(name => window.removeEventListener(name, touch));
+      window.removeEventListener("storage", sharedActivity);
+      window.clearInterval(timer);
+      if (pending !== undefined) window.clearTimeout(pending);
+    };
+  }, [user?.id, idleTimeoutSeconds]);
   useEffect(() => {
     const revoke = () => {
       runViewVersion.current += 1;
@@ -787,7 +884,8 @@ function App() {
   </div>;
   const logout = async () => {
     await api("/auth/logout", { method: "POST" });
-    token = "";
+    sessionActive = false;
+    clearActivity();
     runViewVersion.current += 1;
     setUser(null);
     setSelected(null);
@@ -803,6 +901,9 @@ function App() {
     setPermission(null);
     setDecision(null);
   };
+  if (restoring) return <main className="login"><p role="status">正在恢复登录状态…</p></main>;
+  if (restoreError) return <main className="login"><p role="alert">{restoreError}</p>
+    <button onClick={() => setRestoreVersion(value => value + 1)}>重试</button></main>;
   if (!user)
     return (
       <main className="login">
@@ -817,6 +918,7 @@ function App() {
                 access_token: string;
                 user: User;
                 mode: string;
+                idle_timeout_seconds: number;
               }>("/auth/login", {
                 method: "POST",
                 body: json({ username: name, password, verification_type: verifyType,
@@ -829,7 +931,9 @@ function App() {
                 setVerifyCode("");
                 return;
               }
-              token = res.access_token;
+              sessionActive = true;
+              writeActivity(res.user.id);
+              setIdleTimeoutSeconds(res.idle_timeout_seconds ?? 3600);
               setUser(res.user);
               setMode(res.mode);
               setPassword("");

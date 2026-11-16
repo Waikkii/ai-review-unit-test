@@ -2,12 +2,13 @@ from datetime import timedelta
 from secrets import compare_digest
 import importlib
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from .config import settings
 from .db import get_db, now
-from .models import User
+from .models import User, BrowserSession
+from .browser_sessions import COOKIE_NAME, session_hash, idle_deadline
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -43,13 +44,22 @@ def issue_token(user):
                        "iat": now(), "iss": "unit-test-review", "aud": "review-ui"},
                       settings.secret_key, algorithm="HS256")
 
-def authenticated_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db=Depends(get_db)):
+def authenticated_user(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db=Depends(get_db)):
     try:
-        if credentials is None:
-            raise ValueError()
-        payload = jwt.decode(credentials.credentials, settings.secret_key, algorithms=["HS256"],
-                             issuer="unit-test-review", audience="review-ui")
-        user = db.scalar(select(User).where(User.id == payload["sub"], User.active.is_(True)))
+        if credentials is not None:
+            payload = jwt.decode(credentials.credentials, settings.secret_key, algorithms=["HS256"],
+                                 issuer="unit-test-review", audience="review-ui")
+            user_id = payload["sub"]
+        else:
+            value = request.cookies.get(COOKIE_NAME)
+            if not value or len(value) > 256:
+                raise ValueError()
+            session = db.get(BrowserSession, session_hash(value))
+            if not session or session.last_activity_at <= idle_deadline():
+                raise ValueError()
+            user_id = session.user_id
+            request.state.browser_session_hash = session.token_hash
+        user = db.scalar(select(User).where(User.id == user_id, User.active.is_(True)))
         if not user:
             raise ValueError()
         return user

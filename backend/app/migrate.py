@@ -6,13 +6,13 @@ from sqlalchemy.orm import Session
 from .models import ItemNote, ItemSource, ResultMeasurements, ItemReviewState, ResultWork, RunControl, SessionCredential, Run, Result, Item, Keyword, RunRetainedItem
 from .keywords import LEGACY_ENTRY_DOMAIN, matching_keywords
 from .services import keyword_dict
-from .models import RunItemReviewState
+from .models import RunItemReviewState, BrowserSession
 
 
 def main():
     settings.validate_runtime()
     for table in (ItemNote.__table__, ItemSource.__table__, ResultMeasurements.__table__, ItemReviewState.__table__,
-                  ResultWork.__table__, RunControl.__table__, SessionCredential.__table__, RunRetainedItem.__table__, RunItemReviewState.__table__):
+                  ResultWork.__table__, RunControl.__table__, SessionCredential.__table__, BrowserSession.__table__, RunRetainedItem.__table__, RunItemReviewState.__table__):
         table.create(engine, checkfirst=True)
     indexes = inspect(engine).get_indexes("runs")
     for entry in indexes:
